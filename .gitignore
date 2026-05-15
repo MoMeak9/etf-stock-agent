@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Secrets and local config
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+secrets/
+credentials/
+.streamlit/secrets.toml
+
+# Generated/runtime data
+results/
+eval_results/
+tradingagents/docs/reports/
+**/data_cache/
+*.log
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/
+
+# Local agent/worktree helpers
+.claude/
+.worktrees/
+worktrees/
