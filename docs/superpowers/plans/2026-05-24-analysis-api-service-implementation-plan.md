@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Turn the existing `analyze.py` stock and ETF analysis capability into a FastAPI service with asynchronous job submission, progress inspection, and result retrieval.
+**Goal:** Turn the existing `analyze.py` stock and ETF analysis capability into a local/intranet FastAPI service that accepts analysis jobs and lets users download generated Markdown reports.
 
-**Architecture:** Keep `analyze.py` as the CLI surface, and add a service/API layer that reuses the same analysis primitives instead of duplicating agent logic. HTTP requests create durable in-process job records, a bounded `ProcessPoolExecutor` runs one analysis job per worker process to isolate process-level config mutations, and API endpoints expose job status, progress events, final decisions, stats, and generated report paths.
+**Architecture:** Keep `analyze.py` as the CLI surface, and add a service/API layer that reuses the same analysis primitives instead of duplicating agent logic. HTTP requests create in-memory job records only; a bounded `ProcessPoolExecutor` runs one analysis job per worker process to isolate process-level config mutations; API endpoints expose job status, final results, and generated Markdown report downloads. There is no Redis, SQL database, static database storage, or persistent job metadata in this local/intranet version.
 
 **Tech Stack:** Python 3.10+, FastAPI, Uvicorn, Pydantic, unittest, FastAPI TestClient, existing LangGraph/TradingAgents analysis stack.
 
@@ -17,6 +17,14 @@ The reusable analysis entry points already exist:
 - `analyze.py`: `resolve_asset_type`, `resolve_intensity`, `build_config`, `resolve_analysis_date`, `analyze_single`, `_worker`, `_serializable_config`
 - `tradingagents/graph/trading_graph.py`: `TradingAgentsGraph.propagate(...)`
 - `tradingagents/dataflows/config.py`: market and asset context are thread-local, but `_config` is process-level; API concurrency must avoid running different configs in the same Python process.
+
+Scope boundaries for this version:
+
+- Provide an HTTP analysis service and Markdown report download.
+- Store job state only in memory while the API process is alive.
+- Keep generated reports on the existing local filesystem path produced by `TradingAgentsGraph._generate_report(...)`.
+- Do not add Redis, Celery/RQ, SQLite, Postgres, object storage, static database files, or a frontend/static site.
+- Do not guarantee job recovery after API process restart. Restarting the service clears in-memory job IDs and status.
 
 Current baseline issue discovered before this plan:
 
@@ -62,11 +70,11 @@ Root cause: `tests/test_analyze_asset_type.py` expects `parse_args(... --asset-t
   - Pydantic request and response models.
 
 - Create `tradingagents/api/job_store.py`
-  - Thread-safe in-memory job store with timestamps, events, statuses, and final results.
+  - Thread-safe in-memory job store with timestamps, statuses, and final results.
 
 - Create `tradingagents/api/runner.py`
   - Bounded background runner using `ProcessPoolExecutor`.
-  - Submit jobs, update progress events, and persist final results/errors to `JobStore`.
+  - Submit jobs and save final results/errors to in-memory `JobStore`.
 
 - Create `tradingagents/api/main.py`
   - FastAPI app and endpoints.
@@ -75,10 +83,10 @@ Root cause: `tests/test_analyze_asset_type.py` expects `parse_args(... --asset-t
   - Unit tests for request normalization, date resolution, config construction, and patched analysis execution.
 
 - Create `tests/test_analysis_api.py`
-  - API tests for create/get/list/events/result flows using a synchronous fake runner.
+  - API tests for create/get/result/report download flows using a synchronous fake runner.
 
 - Modify `README.md`
-  - Add API service usage commands and endpoint examples.
+  - Add local/intranet API service usage, systemd deployment, endpoint examples, and report download commands.
 
 ---
 
@@ -307,7 +315,6 @@ class AnalysisServiceTests(unittest.TestCase):
         with patch("tradingagents.services.analysis_service.analyze.analyze_single", return_value=fake_result) as mocked:
             result = run_analysis_batch(
                 AnalysisRequest(tickers=["600519"], date="2026-05-22"),
-                progress_callback=lambda event: None,
             )
 
         self.assertEqual(result["status"], "success")
@@ -350,14 +357,11 @@ import json
 import os
 from dataclasses import asdict, dataclass
 from datetime import date
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 
 import analyze
-
-
-ProgressCallback = Callable[[Dict[str, Any]], None]
 
 
 @dataclass(frozen=True)
@@ -437,67 +441,19 @@ def prepare_analysis(request: AnalysisRequest) -> PreparedAnalysis:
     )
 
 
-def run_analysis_batch(
-    request: AnalysisRequest,
-    progress_callback: Optional[ProgressCallback] = None,
-) -> Dict[str, Any]:
+def run_analysis_batch(request: AnalysisRequest) -> Dict[str, Any]:
     prepared = prepare_analysis(request)
     results: List[Dict[str, Any]] = []
 
-    for index, ticker in enumerate(prepared.request.tickers, start=1):
-        if progress_callback:
-            progress_callback(
-                {
-                    "ticker": ticker,
-                    "phase": "started",
-                    "message": "analysis started",
-                    "completed_steps": 0,
-                    "total_steps": prepared.total_steps_per_ticker,
-                    "index": index,
-                    "total": len(prepared.request.tickers),
-                }
-            )
-
-        completed_steps = 0
-
-        def on_progress(phase_name: str, weight: int) -> None:
-            nonlocal completed_steps
-            completed_steps += weight
-            if progress_callback:
-                progress_callback(
-                    {
-                        "ticker": ticker,
-                        "phase": phase_name,
-                        "message": phase_name,
-                        "completed_steps": min(completed_steps, prepared.total_steps_per_ticker),
-                        "total_steps": prepared.total_steps_per_ticker,
-                        "index": index,
-                        "total": len(prepared.request.tickers),
-                    }
-                )
-
+    for ticker in prepared.request.tickers:
         result = analyze.analyze_single(
             ticker=ticker,
             trade_date=prepared.trade_date,
             config=prepared.config,
             analysts=prepared.analysts,
             debug=prepared.request.debug,
-            on_progress=on_progress,
         )
         results.append(result)
-
-        if progress_callback:
-            progress_callback(
-                {
-                    "ticker": ticker,
-                    "phase": "completed" if result.get("status") == "success" else "failed",
-                    "message": result.get("error", "analysis completed"),
-                    "completed_steps": prepared.total_steps_per_ticker,
-                    "total_steps": prepared.total_steps_per_ticker,
-                    "index": index,
-                    "total": len(prepared.request.tickers),
-                }
-            )
 
     return {
         "status": "success" if all(item.get("status") == "success" for item in results) else "error",
@@ -588,15 +544,12 @@ class AnalysisApiModelTests(unittest.TestCase):
         self.assertEqual(job["status"], "queued")
         self.assertEqual(store.get_job(job["job_id"])["job_id"], job["job_id"])
 
-        store.append_event(job["job_id"], {"phase": "started", "ticker": "600519"})
         store.mark_running(job["job_id"])
         store.mark_succeeded(job["job_id"], {"status": "success", "results": []})
 
         stored = store.get_job(job["job_id"])
         self.assertEqual(stored["status"], "success")
         self.assertEqual(stored["result"]["status"], "success")
-        self.assertEqual(len(store.get_events(job["job_id"])), 1)
-        self.assertEqual(len(store.list_jobs()), 1)
 
 
 if __name__ == "__main__":
@@ -658,7 +611,6 @@ class AnalysisJobSummary(BaseModel):
 
 
 class AnalysisJobDetail(AnalysisJobSummary):
-    events: List[Dict[str, Any]]
     result: Optional[Dict[str, Any]] = None
 
 
@@ -680,7 +632,7 @@ import copy
 import threading
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 
 def _now() -> datetime:
@@ -701,7 +653,6 @@ class JobStore:
             "created_at": now,
             "updated_at": now,
             "request": copy.deepcopy(request),
-            "events": [],
             "result": None,
             "error": None,
         }
@@ -709,20 +660,10 @@ class JobStore:
             self._jobs[job_id] = job
         return copy.deepcopy(job)
 
-    def list_jobs(self) -> List[Dict[str, Any]]:
-        with self._lock:
-            jobs = list(self._jobs.values())
-        jobs.sort(key=lambda item: item["created_at"], reverse=True)
-        return [copy.deepcopy(job) for job in jobs]
-
     def get_job(self, job_id: str) -> Optional[Dict[str, Any]]:
         with self._lock:
             job = self._jobs.get(job_id)
             return copy.deepcopy(job) if job else None
-
-    def get_events(self, job_id: str) -> List[Dict[str, Any]]:
-        job = self.get_job(job_id)
-        return list(job["events"]) if job else []
 
     def mark_running(self, job_id: str) -> None:
         self._update(job_id, status="running")
@@ -732,14 +673,6 @@ class JobStore:
 
     def mark_failed(self, job_id: str, error: str) -> None:
         self._update(job_id, status="error", error=error)
-
-    def append_event(self, job_id: str, event: Dict[str, Any]) -> None:
-        with self._lock:
-            job = self._jobs[job_id]
-            enriched = copy.deepcopy(event)
-            enriched["created_at"] = _now().isoformat()
-            job["events"].append(enriched)
-            job["updated_at"] = _now()
 
     def _update(self, job_id: str, **fields: Any) -> None:
         with self._lock:
@@ -968,7 +901,6 @@ class FakeRunner:
                 "workers": request.workers,
             }
         )
-        self.store.append_event(job["job_id"], {"ticker": request.tickers[0], "phase": "completed"})
         self.store.mark_succeeded(
             job["job_id"],
             {"status": "success", "results": [{"ticker": request.tickers[0], "status": "success"}]},
@@ -994,7 +926,6 @@ class AnalysisApiTests(unittest.TestCase):
         detail = self.client.get(f"/api/v1/analysis/jobs/{job_id}")
         self.assertEqual(detail.status_code, 200)
         self.assertEqual(detail.json()["status"], "success")
-        self.assertEqual(len(detail.json()["events"]), 1)
 
         result = self.client.get(f"/api/v1/analysis/jobs/{job_id}/result")
         self.assertEqual(result.status_code, 200)
@@ -1090,23 +1021,12 @@ def create_app(
     def create_analysis_job(payload: AnalysisJobCreate) -> dict:
         return app.state.job_runner.submit(_to_request(payload))
 
-    @app.get("/api/v1/analysis/jobs", response_model=list[AnalysisJobSummary])
-    def list_analysis_jobs() -> list[dict]:
-        return app.state.job_store.list_jobs()
-
     @app.get("/api/v1/analysis/jobs/{job_id}", response_model=AnalysisJobDetail)
     def get_analysis_job(job_id: str) -> dict:
         job = app.state.job_store.get_job(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="job not found")
         return job
-
-    @app.get("/api/v1/analysis/jobs/{job_id}/events")
-    def get_analysis_job_events(job_id: str) -> list[dict]:
-        job = app.state.job_store.get_job(job_id)
-        if job is None:
-            raise HTTPException(status_code=404, detail="job not found")
-        return app.state.job_store.get_events(job_id)
 
     @app.get("/api/v1/analysis/jobs/{job_id}/result", response_model=AnalysisResultResponse)
     def get_analysis_job_result(job_id: str, response: Response) -> dict:
