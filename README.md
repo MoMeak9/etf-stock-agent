@@ -65,6 +65,76 @@ state, decision = graph.propagate("510300", "2026-05-14")
 print(decision)
 ```
 
+## A 股 ETF 中文使用说明
+
+本项目支持直接分析 A 股场内 ETF，例如 `159949`、`510300`、`588000` 等。ETF 模式会启用四类分析师：行情技术、资金流与情绪、新闻事件、产品结构，并在最终报告中给出交易与配置视角。
+
+### 环境准备
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[cn]"
+cp .env.example .env
+```
+
+在 `.env` 中配置：
+
+```bash
+TUSHARE_TOKEN=你的TushareToken
+DEEPSEEK_API_KEY=你的DeepSeekKey
+```
+
+也可以改用项目已支持的其他 LLM provider。A 股 ETF 数据优先使用 Tushare，并在部分行情、净值或组合数据不可用时尝试 AKShare fallback。
+
+### 运行一次完整 ETF 分析
+
+```python
+from pathlib import Path
+from dotenv import load_dotenv
+
+from tradingagents.default_config import DEFAULT_CONFIG
+from tradingagents.graph.trading_graph import TradingAgentsGraph
+
+load_dotenv(dotenv_path=Path(".env"))
+
+config = DEFAULT_CONFIG.copy()
+config["asset_type"] = "etf"
+config["selected_etf_analysts"] = ["market", "flow", "news", "product"]
+config["llm_provider"] = "deepseek"
+config["quick_think_llm"] = "deepseek-chat"
+config["deep_think_llm"] = "deepseek-chat"
+
+graph = TradingAgentsGraph(
+    selected_analysts=config["selected_etf_analysts"],
+    config=config,
+)
+
+state, decision = graph.propagate("159949", "2026-05-21")
+print(decision)
+```
+
+报告会写入：
+
+```text
+tradingagents/docs/reports/{ETF代码}_{日期}_report.md
+```
+
+### ETF 数据口径
+
+- 行情包：提供收盘价、成交额、20 日均成交额、波动率、最大回撤等；Tushare `fund_daily.amount` 会从“千元”换算成“元”。
+- 产品包：用同一日期的二级市场收盘价和基金 NAV 计算折溢价，避免价格日期和净值日期错配。
+- 持仓/暴露包：优先读取 ETF 定期持仓；指数权重若没有指定交易日数据，会 fallback 到 Tushare 最新可用权重。
+- 资金流包：基于份额或规模代理数据计算 5/20/60 日变化。
+- 跟踪误差：如果缺少跟踪误差时间序列，报告会明确写明缺失；不会把低折溢价直接等同于低跟踪误差。
+
+### 常见注意事项
+
+- ETF 代码直接传 6 位代码即可，例如 `159949`，不需要写成 `159949.SZ`。
+- 交易日期建议使用 `YYYY-MM-DD`，例如 `2026-05-21`。
+- Tushare 对部分 ETF 或指数权重接口可能返回空数据；报告中的 `Warnings` 和 `Missing Fields` 会说明数据缺口。
+- 当前 `analyze.py` 主要用于批量股票分析；完整 ETF 分析建议使用上面的 Python graph 调用方式。
+
 ## A-Share ETF Research Packages
 
 A-share ETF tools use structured research packages before generating analyst reports. The package layer normalizes vendor data and makes data quality explicit:
