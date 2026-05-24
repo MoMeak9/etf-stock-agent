@@ -114,6 +114,18 @@ state, decision = graph.propagate("159949", "2026-05-21")
 print(decision)
 ```
 
+也可以通过 `analyze.py` 直接运行：
+
+```bash
+python analyze.py 159949 --asset-type etf -l 3 -d 2026-05-21
+```
+
+如果希望自动识别 A 股 ETF：
+
+```bash
+python analyze.py 159949 --asset-type auto -l 3 -d 2026-05-21
+```
+
 报告会写入：
 
 ```text
@@ -133,7 +145,7 @@ tradingagents/docs/reports/{ETF代码}_{日期}_report.md
 - ETF 代码直接传 6 位代码即可，例如 `159949`，不需要写成 `159949.SZ`。
 - 交易日期建议使用 `YYYY-MM-DD`，例如 `2026-05-21`。
 - Tushare 对部分 ETF 或指数权重接口可能返回空数据；报告中的 `Warnings` 和 `Missing Fields` 会说明数据缺口。
-- 当前 `analyze.py` 主要用于批量股票分析；完整 ETF 分析建议使用上面的 Python graph 调用方式。
+- `analyze.py` 同时支持股票和 ETF。默认按股票分析；ETF 请使用 `--asset-type etf`，或使用 `--asset-type auto` 自动识别。同一批次不要混合股票和 ETF。
 
 ## A-Share ETF Research Packages
 
@@ -145,10 +157,11 @@ A-share ETF tools use structured research packages before generating analyst rep
 - Tool outputs include package status, source, warnings, missing fields, derived metrics, and compact raw summaries so analysts can distinguish unavailable data from weak data.
 - Product prompts require tracking-error time-series gaps to be stated explicitly; low discount/premium is not treated as proof of low tracking error.
 
-Batch stock analysis:
+Batch stock or ETF analysis:
 
 ```bash
 python analyze.py 000001 600519 AAPL -l 3 -w 2
+python analyze.py 159949 510300 --asset-type etf -l 3 -w 2
 ```
 
 ## Sensitive Data

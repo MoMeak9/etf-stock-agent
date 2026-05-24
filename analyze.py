@@ -3,15 +3,21 @@
 TradingAgents 多股票并行分析工具
 
 功能:
-  - 支持多只股票并行分析
+  - 支持多只股票或A股ETF并行分析
   - 5档分析强度 (1-闪电 ~ 5-极致)
   - 完整 CLI 参数支持
   - 自动市场检测 (A股/港股/美股)
   - 结果汇总与对比输出
 
 用法示例:
-  # 分析单只A股
+  # 分析单只A股股票
   python analyze.py 000001
+
+  # 分析单只A股ETF
+  python analyze.py 159949 --asset-type etf
+
+  # 自动识别股票/ETF（同一批次不能混合）
+  python analyze.py 159949 --asset-type auto
 
   # 并行分析多只股票，强度3
   python analyze.py 000001 600519 00700 AAPL -l 3
@@ -69,7 +75,7 @@ def _report_path_for(ticker: str, trade_date: str, config: Dict[str, Any]) -> Pa
 
 # ─── 5 档分析强度定义 ────────────────────────────────────────────
 # 每档对应不同的分析师组合、辩论轮数和递归限制
-INTENSITY_PROFILES = {
+STOCK_INTENSITY_PROFILES = {
     1: {
         "name": "闪电",
         "desc": "极速扫描，最少分析师，单轮辩论",
@@ -112,12 +118,87 @@ INTENSITY_PROFILES = {
     },
 }
 
+ETF_INTENSITY_PROFILES = {
+    1: {
+        "name": "ETF闪电",
+        "desc": "极速扫描，ETF行情技术分析，单轮辩论",
+        "analysts": ["market"],
+        "max_debate_rounds": 1,
+        "max_risk_discuss_rounds": 1,
+        "max_recur_limit": 50,
+    },
+    2: {
+        "name": "ETF快速",
+        "desc": "快速分析，行情+产品结构，单轮辩论",
+        "analysts": ["market", "product"],
+        "max_debate_rounds": 1,
+        "max_risk_discuss_rounds": 1,
+        "max_recur_limit": 80,
+    },
+    3: {
+        "name": "ETF标准",
+        "desc": "均衡分析，行情+资金流+新闻+产品，双轮辩论",
+        "analysts": ["market", "flow", "news", "product"],
+        "max_debate_rounds": 2,
+        "max_risk_discuss_rounds": 2,
+        "max_recur_limit": 100,
+    },
+    4: {
+        "name": "ETF深度",
+        "desc": "深度分析，全部ETF分析师，三轮辩论",
+        "analysts": ["market", "flow", "news", "product"],
+        "max_debate_rounds": 3,
+        "max_risk_discuss_rounds": 3,
+        "max_recur_limit": 150,
+    },
+    5: {
+        "name": "ETF极致",
+        "desc": "最高精度，全部ETF分析师，五轮辩论",
+        "analysts": ["market", "flow", "news", "product"],
+        "max_debate_rounds": 5,
+        "max_risk_discuss_rounds": 5,
+        "max_recur_limit": 200,
+    },
+}
+
+INTENSITY_PROFILES = STOCK_INTENSITY_PROFILES
+
+
+def resolve_asset_type(tickers: List[str], requested: str = "stock") -> str:
+    """Resolve CLI asset type, optionally detecting A-share ETFs."""
+    normalized = (requested or "stock").lower()
+    if normalized in {"stock", "etf"}:
+        return normalized
+    if normalized != "auto":
+        raise ValueError(f"Unsupported asset type: {requested}")
+
+    from tradingagents.dataflows.market_utils import detect_market, is_etf
+
+    detected = []
+    for ticker in tickers:
+        asset_type = "etf" if detect_market(ticker) == "cn" and is_etf(ticker) else "stock"
+        detected.append(asset_type)
+    unique = set(detected)
+    if len(unique) > 1:
+        raise ValueError("auto asset type detected mixed stock and ETF tickers; run separate batches")
+    return detected[0] if detected else "stock"
+
+
+def resolve_intensity(args: argparse.Namespace) -> dict:
+    """Return the intensity profile for the resolved asset type."""
+    profiles = ETF_INTENSITY_PROFILES if getattr(args, "asset_type", "stock") == "etf" else STOCK_INTENSITY_PROFILES
+    return profiles[args.level]
+
 
 def build_config(args: argparse.Namespace, intensity: dict) -> Dict[str, Any]:
     """根据 CLI 参数和强度档位构建配置。"""
     from tradingagents.default_config import DEFAULT_CONFIG
 
     config = DEFAULT_CONFIG.copy()
+    asset_type = getattr(args, "asset_type", "stock")
+    config["asset_type"] = asset_type
+    if asset_type == "etf":
+        config["selected_etf_analysts"] = intensity["analysts"]
 
     # LLM 设置
     config["llm_provider"] = args.provider
@@ -221,6 +302,10 @@ PHASE_MAP = {
     "news_report":              ("新闻分析", 2),
     "fundamentals_report":      ("基本面分析", 2),
     "china_market_report":      ("中国市场分析", 2),
+    "etf_market_report":        ("ETF市场分析", 2),
+    "etf_flow_report":          ("ETF资金流分析", 2),
+    "etf_news_report":          ("ETF新闻分析", 2),
+    "etf_product_report":       ("ETF产品分析", 2),
     "_inv_count":               ("投资辩论", 1),
     "investment_plan":          ("研究经理决策", 2),
     "trader_investment_plan":   ("交易员计划", 2),
@@ -231,13 +316,21 @@ PHASE_MAP = {
 
 def _calc_total_steps(analysts: List[str], config: Dict[str, Any]) -> int:
     """根据分析师和辩论轮数估算总步数。"""
-    analyst_field_map = {
-        "market": "market_report",
-        "fundamentals": "fundamentals_report",
-        "news": "news_report",
-        "social": "sentiment_report",
-        "china_market": "china_market_report",
-    }
+    if config.get("asset_type") == "etf":
+        analyst_field_map = {
+            "market": "etf_market_report",
+            "flow": "etf_flow_report",
+            "news": "etf_news_report",
+            "product": "etf_product_report",
+        }
+    else:
+        analyst_field_map = {
+            "market": "market_report",
+            "fundamentals": "fundamentals_report",
+            "news": "news_report",
+            "social": "sentiment_report",
+            "china_market": "china_market_report",
+        }
     steps = 0
     for a in analysts:
         field = analyst_field_map.get(a)
@@ -324,6 +417,10 @@ def analyze_single(
             "fundamentals_report": len(final_state.get("fundamentals_report", "")),
             "news_report": len(final_state.get("news_report", "")),
             "sentiment_report": len(final_state.get("sentiment_report", "")),
+            "etf_market_report": len(final_state.get("etf_market_report", "")),
+            "etf_flow_report": len(final_state.get("etf_flow_report", "")),
+            "etf_news_report": len(final_state.get("etf_news_report", "")),
+            "etf_product_report": len(final_state.get("etf_product_report", "")),
             "final_trade_decision": len(final_state.get("final_trade_decision", "")),
         }
         log(
@@ -392,9 +489,11 @@ def print_header(args: argparse.Namespace, intensity: dict):
     level_colors = {1: "cyan", 2: "green", 3: "yellow", 4: "magenta", 5: "red"}
     lv_color = level_colors.get(args.level, "white")
     original_date = getattr(args, "original_date", args.date)
+    asset_label = "A股ETF" if getattr(args, "asset_type", "stock") == "etf" else "股票"
 
     info_lines = [
-        f"[bold]股票列表[/bold]  : [cyan]{', '.join(args.tickers)}[/cyan]",
+        f"[bold]{asset_label}列表[/bold]  : [cyan]{', '.join(args.tickers)}[/cyan]",
+        f"[bold]资产类型[/bold]  : {asset_label}",
         f"[bold]分析日期[/bold]  : {original_date} -> {args.date}",
         f"[bold]分析强度[/bold]  : [{lv_color}]Lv.{args.level} {intensity['name']} — {intensity['desc']}[/{lv_color}]",
         f"[bold]分析师团队[/bold]: {', '.join(intensity['analysts'])}",
@@ -404,8 +503,8 @@ def print_header(args: argparse.Namespace, intensity: dict):
     ]
     panel = Panel(
         "\n".join(info_lines),
-        title="[bold]TradingAgents 多股票分析工具[/bold]",
-        subtitle=f"共 {len(args.tickers)} 只股票",
+        title="[bold]TradingAgents 股票/ETF分析工具[/bold]",
+        subtitle=f"共 {len(args.tickers)} 个标的",
         border_style="blue",
         padding=(1, 2),
     )
@@ -559,28 +658,41 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     argv_list = list(argv) if argv is not None else sys.argv[1:]
     parser = argparse.ArgumentParser(
         prog="analyze",
-        description="TradingAgents 多股票并行分析工具",
+        description="TradingAgents 股票/ETF并行分析工具",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
 分析强度档位:
-  1  闪电  极速扫描，市场分析师，单轮辩论
-  2  快速  核心双分析师（市场+基本面），单轮辩论
-  3  标准  三路分析师（+新闻），双轮辩论
-  4  深度  全部分析师，三轮辩论
-  5  极致  全部分析师，五轮辩论
+  股票模式:
+    1  闪电  极速扫描，市场分析师，单轮辩论
+    2  快速  核心双分析师（市场+基本面），单轮辩论
+    3  标准  三路分析师（+新闻），双轮辩论
+    4  深度  全部分析师，三轮辩论
+    5  极致  全部分析师，五轮辩论
+  ETF模式:
+    1  ETF闪电  行情技术分析
+    2  ETF快速  行情+产品结构
+    3+ ETF标准  行情+资金流+新闻+产品
 
 示例:
-  %(prog)s 000001                       # A股单只，默认强度2
-  %(prog)s 000001 600519 -l 4           # 两只A股，深度分析
-  %(prog)s AAPL MSFT GOOGL -l 3 -w 3   # 三只美股并行
-  %(prog)s 000001 -l 5 -d 2025-03-17   # 极致分析，指定日期
+  %(prog)s 000001                                  # A股股票，默认强度2
+  %(prog)s 000001 600519 -l 4                      # 两只A股股票，深度分析
+  %(prog)s AAPL MSFT GOOGL -l 3 -w 3               # 三只美股并行
+  %(prog)s 159949 --asset-type etf -l 3            # A股ETF完整分析
+  %(prog)s 159949 --asset-type auto                # 自动识别ETF
+  %(prog)s 000001 -l 5 -d 2025-03-17               # 极致分析，指定日期
 """,
     )
 
     parser.add_argument(
         "tickers",
         nargs="+",
-        help="股票代码列表（空格分隔），支持A股/港股/美股混合",
+        help="股票或ETF代码列表（空格分隔）；ETF模式仅支持A股场内ETF",
+    )
+    parser.add_argument(
+        "--asset-type",
+        choices=["stock", "etf", "auto"],
+        default="stock",
+        help="资产类型：stock股票、etf A股ETF、auto自动识别（默认: stock）",
     )
     parser.add_argument(
         "-l", "--level",
@@ -640,6 +752,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
 
     args = parser.parse_args(argv_list)
     args.date_was_explicit = _was_date_explicitly_set(argv_list)
+    args.asset_type = resolve_asset_type(args.tickers, args.asset_type)
     return args
 
 
@@ -709,7 +822,7 @@ def main(argv: Optional[List[str]] = None):
         requested_date=args.date,
         date_was_explicit=args.date_was_explicit,
     )
-    intensity = INTENSITY_PROFILES[args.level]
+    intensity = resolve_intensity(args)
     config = build_config(args, intensity)
     analysts = intensity["analysts"]
 
