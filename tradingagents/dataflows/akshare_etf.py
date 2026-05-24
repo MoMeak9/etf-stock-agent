@@ -34,6 +34,60 @@ def _normalize_price_frame(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def fetch_etf_daily(symbol: str, start_date: str, end_date: str):
+    """Fetch structured daily ETF market data from akshare."""
+    import akshare as ak
+
+    saved = bypass_proxy_for_cn()
+    try:
+        df = ak.fund_etf_hist_em(
+            symbol=symbol,
+            period="daily",
+            start_date=start_date.replace("-", ""),
+            end_date=end_date.replace("-", ""),
+            adjust="qfq",
+        )
+        return _normalize_price_frame(df) if df is not None else df
+    finally:
+        restore_proxy(saved)
+
+
+def fetch_etf_basic(symbol: str):
+    """Fetch structured ETF basic metadata from akshare."""
+    import akshare as ak
+
+    saved = bypass_proxy_for_cn()
+    try:
+        funds = ak.fund_name_em()
+        if funds is None or funds.empty:
+            return funds
+        return funds[funds["基金代码"] == symbol]
+    finally:
+        restore_proxy(saved)
+
+
+def fetch_etf_nav(symbol: str):
+    """Fetch structured ETF NAV data from akshare."""
+    import akshare as ak
+
+    saved = bypass_proxy_for_cn()
+    try:
+        return ak.fund_etf_fund_info_em(fund=symbol)
+    finally:
+        restore_proxy(saved)
+
+
+def fetch_etf_portfolio(symbol: str, year: str):
+    """Fetch structured ETF portfolio holdings from akshare."""
+    import akshare as ak
+
+    saved = bypass_proxy_for_cn()
+    try:
+        return ak.fund_portfolio_hold_em(symbol=symbol, date=year)
+    finally:
+        restore_proxy(saved)
+
+
 def get_etf_price_data(
     symbol: Annotated[str, "A-share ETF code"],
     start_date: Annotated[str, "Start date in yyyy-mm-dd format"],

@@ -80,7 +80,7 @@ def _truncate_indicator_block(text: str, max_lines: int = 25) -> str:
     lines = text.splitlines()
     if len(lines) <= max_lines:
         return text
-    return "\n".join(lines[:2] + lines[-(max_lines - 2):])
+    return "\n".join(lines[:max_lines])
 
 
 def create_etf_market_analyst(llm, toolkit=None):

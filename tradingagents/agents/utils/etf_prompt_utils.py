@@ -31,6 +31,7 @@ def build_etf_product_prompt(ticker: str, etf_type: str = "") -> str:
         f"{build_etf_report_header('ETF 产品分析', ticker)}\n"
         "请围绕以下数据生成报告：基金 profile、holdings（持仓结构）、折溢价、跟踪信息、费率、规模与份额变化。\n"
         "必须明确讨论：产品质量、流动性、配置适配性、交易风险。\n"
+        "若跟踪误差时间序列不可用，必须写明该字段缺失；不得用低折溢价直接推断跟踪误差优秀。\n"
         f"{get_etf_type_prompt_suffix(etf_type)}\n"
         "禁止出现公司财报、估值倍数、管理层等个股基本面措辞。"
     )

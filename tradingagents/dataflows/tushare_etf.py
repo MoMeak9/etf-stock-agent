@@ -17,6 +17,84 @@ def _to_etf_ts_code(symbol: str) -> str:
     return f"{normalized}.{exchange}"
 
 
+def _compact_date(date: str) -> str:
+    return date.replace("-", "")
+
+
+def _call_tushare_method(pro, method_name: str, fallback_name: str = None, **kwargs):
+    method = getattr(pro, method_name, None)
+    if method is not None:
+        return method(**kwargs)
+    if not fallback_name:
+        method = getattr(pro, method_name)
+        return method(**kwargs)
+    return getattr(pro, fallback_name)(**kwargs)
+
+
+def fetch_etf_basic(ticker: str):
+    """Fetch structured ETF basic metadata from tushare."""
+    pro = _get_tushare_api()
+    ts_code = _to_etf_ts_code(ticker)
+    try:
+        return pro.etf_basic(ts_code=ts_code)
+    except Exception as exc:
+        message = str(exc).lower()
+        if "ts_code" not in message and "unexpected" not in message and "keyword" not in message:
+            raise
+        df = pro.etf_basic()
+        if df is not None and not df.empty and "ts_code" in df.columns:
+            return df[df["ts_code"] == ts_code]
+        return df
+
+
+def fetch_etf_daily(symbol: str, start_date: str, end_date: str):
+    """Fetch structured daily ETF market data from tushare."""
+    pro = _get_tushare_api()
+    return pro.fund_daily(
+        ts_code=_to_etf_ts_code(symbol),
+        start_date=_compact_date(start_date),
+        end_date=_compact_date(end_date),
+    )
+
+
+def fetch_etf_share_size(symbol: str, start_date: str, end_date: str):
+    """Fetch structured ETF share/size data from tushare."""
+    pro = _get_tushare_api()
+    return _call_tushare_method(
+        pro,
+        "etf_share_size",
+        fallback_name="fund_share",
+        ts_code=_to_etf_ts_code(symbol),
+        start_date=_compact_date(start_date),
+        end_date=_compact_date(end_date),
+    )
+
+
+def fetch_etf_nav(symbol: str, start_date: str, end_date: str):
+    """Fetch structured ETF NAV data from tushare."""
+    pro = _get_tushare_api()
+    return pro.fund_nav(
+        ts_code=_to_etf_ts_code(symbol),
+        start_date=_compact_date(start_date),
+        end_date=_compact_date(end_date),
+    )
+
+
+def fetch_etf_portfolio(symbol: str):
+    """Fetch structured ETF portfolio holdings from tushare."""
+    pro = _get_tushare_api()
+    return pro.fund_portfolio(ts_code=_to_etf_ts_code(symbol))
+
+
+def fetch_index_weight(index_code: str, trade_date: str = ""):
+    """Fetch structured index constituent weights from tushare."""
+    pro = _get_tushare_api()
+    kwargs = {"index_code": index_code}
+    if trade_date:
+        kwargs["trade_date"] = _compact_date(trade_date)
+    return pro.index_weight(**kwargs)
+
+
 def get_etf_price_data(
     symbol: Annotated[str, "A-share ETF code"],
     start_date: Annotated[str, "Start date in yyyy-mm-dd format"],
