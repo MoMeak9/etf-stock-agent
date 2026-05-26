@@ -7,6 +7,8 @@ from typing import Any
 from tradingagents.dataflows.etf_models import DataQuality, ETFAdmission
 from tradingagents.dataflows.market_utils import detect_market, get_exchange, is_etf, normalize_symbol
 
+_ADMISSION_CACHE: dict[str, ETFAdmission] = {}
+
 
 def _to_ts_code(symbol: str) -> str:
     normalized = normalize_symbol(symbol, "cn")
@@ -35,6 +37,9 @@ def admit_etf(symbol: str) -> ETFAdmission:
     normalized = normalize_symbol(symbol, "cn")
     exchange = get_exchange(normalized)
     ts_code = _to_ts_code(normalized)
+    cached = _ADMISSION_CACHE.get(normalized)
+    if cached is not None:
+        return cached
 
     if detect_market(symbol) != "cn" or not is_etf(normalized):
         return ETFAdmission(
@@ -57,9 +62,9 @@ def admit_etf(symbol: str) -> ETFAdmission:
         warnings.append(f"etf_basic unavailable: {exc}")
 
     etf_type = _classify_etf(profile)
-    is_supported = etf_type in {"broad", "theme", "commodity"}
+    is_supported = etf_type in {"broad", "theme", "commodity", "qdii"}
     reason = "" if is_supported else f"ETF type '{etf_type}' is not supported for professional analysis."
-    return ETFAdmission(
+    admission = ETFAdmission(
         symbol=normalized,
         ts_code=ts_code,
         exchange=exchange,
@@ -73,3 +78,6 @@ def admit_etf(symbol: str) -> ETFAdmission:
             missing_fields=[] if profile else ["basic_profile"],
         ),
     )
+    if profile:
+        _ADMISSION_CACHE[normalized] = admission
+    return admission

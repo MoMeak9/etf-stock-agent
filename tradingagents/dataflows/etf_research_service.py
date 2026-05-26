@@ -247,9 +247,42 @@ def _profile_value(profile: dict[str, Any], candidates: tuple[str, ...]):
     return None
 
 
+def _is_qdii_admission(admission: ETFAdmission) -> bool:
+    return str(admission.etf_type).lower() == "qdii"
+
+
+def _qdii_context(admission: ETFAdmission) -> dict[str, Any]:
+    if not _is_qdii_admission(admission):
+        return {}
+    return _clean(
+        {
+            "qdii_profile": True,
+            "cross_border": True,
+            "index_code": _profile_value(admission.profile, ("index_code", "指数代码")),
+            "index_name": _profile_value(admission.profile, ("index_name", "指数名称")),
+            "currency_fx_risk": "QDII ETF NAV and secondary-market price may be affected by RMB/foreign-currency moves.",
+            "nav_lag_risk": "Overseas-market close times and NAV publication can lag A-share trading hours.",
+            "holiday_mismatch_risk": "A-share and overseas-market holidays may differ, affecting liquidity and price discovery.",
+            "premium_discount_risk": "Cross-border creation/redemption constraints can make ETF premium or discount persist.",
+        }
+    )
+
+
+def _append_qdii_warnings(warnings: list[str], admission: ETFAdmission) -> list[str]:
+    if not _is_qdii_admission(admission):
+        return warnings
+    return _dedupe(
+        warnings
+        + [
+            "QDII ETF cross-border risks: FX, NAV lag, holiday mismatch, and persistent premium/discount should be assessed separately.",
+        ]
+    )
+
+
 def build_market_package(symbol: str, curr_date: str) -> ETFResearchPackage:
     from tradingagents.dataflows import akshare_etf, tushare_etf
 
+    admission = admit_etf(symbol)
     start = _date_lookback(curr_date, 220)
     daily, fallback, warnings = _call_with_fallback(
         lambda: tushare_etf.fetch_etf_daily(symbol, start, curr_date),
@@ -282,6 +315,7 @@ def build_market_package(symbol: str, curr_date: str) -> ETFResearchPackage:
         metrics.update(compute_volatility_and_drawdown(_with_numeric_column(daily, close_col), close_col=close_col, date_col=date_col))
     else:
         missing_fields.append("close")
+    warnings = _append_qdii_warnings(warnings, admission)
     status = _status_from(missing_fields, warnings)
     quality = DataQuality(status=status, fallback_source=fallback, as_of_date=_latest_date(daily, date_col), warnings=warnings, missing_fields=missing_fields)
     raw_columns = tuple(
@@ -295,10 +329,13 @@ def build_market_package(symbol: str, curr_date: str) -> ETFResearchPackage:
         status=status,
         quality=quality,
         metrics=_clean(metrics),
-        raw_summary={
-            "daily": _frame_summary(daily, source="tushare" if fallback == "none" else fallback, date_col=date_col),
-            "recent_daily_sample": _frame_tail_records(daily, raw_columns, rows=20, date_col=date_col),
-        },
+        raw_summary=_clean(
+            {
+                "qdii_context": _qdii_context(admission),
+                "daily": _frame_summary(daily, source="tushare" if fallback == "none" else fallback, date_col=date_col),
+                "recent_daily_sample": _frame_tail_records(daily, raw_columns, rows=20, date_col=date_col),
+            }
+        ),
     )
 
 
@@ -328,7 +365,7 @@ def build_product_package(symbol: str, curr_date: str) -> ETFResearchPackage:
         validator=lambda frame: _has_numeric_values(frame, ("close", "Close", "收盘", "收盘价"), positive=True),
         validation_label="daily close",
     )
-    warnings = _dedupe(list(admission.quality.warnings) + basic_warnings + nav_warnings + daily_warnings)
+    warnings = _append_qdii_warnings(_dedupe(list(admission.quality.warnings) + basic_warnings + nav_warnings + daily_warnings), admission)
     missing_fields = list(admission.quality.missing_fields)
     close, nav_value, aligned_date = _aligned_latest_values(
         daily,
@@ -355,6 +392,7 @@ def build_product_package(symbol: str, curr_date: str) -> ETFResearchPackage:
         raw_summary=_clean(
             {
                 "admission": admission.profile,
+                "qdii_context": _qdii_context(admission),
                 "basic": _frame_summary(basic, source=_source_from_fallback(basic_fallback)),
                 "nav": _frame_summary(nav, source=_source_from_fallback(nav_fallback), date_col=_pick_column(nav, DATE_COLUMNS)),
                 "daily": _frame_summary(daily, source=_source_from_fallback(daily_fallback), date_col=_pick_column(daily, DATE_COLUMNS)),
@@ -378,7 +416,7 @@ def build_exposure_package(symbol: str, curr_date: str) -> ETFResearchPackage:
         validator=lambda frame: _has_numeric_values(frame, ("mkv", "stk_mkv_ratio", "weight", "占净值比例"), positive=True),
         validation_label="holding weight",
     )
-    warnings = _dedupe(list(admission.quality.warnings) + holding_warnings)
+    warnings = _append_qdii_warnings(_dedupe(list(admission.quality.warnings) + holding_warnings), admission)
     missing_fields = list(admission.quality.missing_fields)
     holdings_date_col = _pick_column(holdings, ("end_date", "报告期", "截止日期", "日期"))
     latest_period = _latest_date(holdings, holdings_date_col)
@@ -391,6 +429,8 @@ def build_exposure_package(symbol: str, curr_date: str) -> ETFResearchPackage:
         missing_fields.append("holding_weight")
     if not _has_data(holdings):
         missing_fields.append("holdings")
+        if _is_qdii_admission(admission):
+            warnings.append("QDII ETF holdings unavailable from current vendor path; exposure analysis is degraded, not blocked.")
 
     index_code = _profile_value(admission.profile, ("index_code", "指数代码"))
     index_weights = None
@@ -417,6 +457,7 @@ def build_exposure_package(symbol: str, curr_date: str) -> ETFResearchPackage:
         raw_summary=_clean(
             {
                 "admission": admission.profile,
+                "qdii_context": _qdii_context(admission),
                 "holdings": _frame_summary(holdings, source=_source_from_fallback(holdings_fallback), date_col=holdings_date_col),
                 "holding_weight_column": weight_col or "N/A",
                 "latest_period": latest_period or "N/A",
@@ -441,7 +482,7 @@ def build_flow_package(symbol: str, curr_date: str) -> ETFResearchPackage:
         validator=lambda frame: _has_numeric_values(frame, ("share", "fd_share", "total_share", "基金份额", "净资产"), positive=True),
         validation_label="share or size",
     )
-    warnings = _dedupe(list(admission.quality.warnings) + flow_warnings)
+    warnings = _append_qdii_warnings(_dedupe(list(admission.quality.warnings) + flow_warnings), admission)
     missing_fields = list(admission.quality.missing_fields)
     share_col = _pick_column(flow, ("share", "fd_share", "total_share", "基金份额", "净资产"))
     date_col = _pick_column(flow, DATE_COLUMNS)
@@ -455,17 +496,42 @@ def build_flow_package(symbol: str, curr_date: str) -> ETFResearchPackage:
         missing_fields.append("share_size")
     status = "unavailable" if not _has_data(flow) else _status_from(missing_fields, warnings)
     quality = DataQuality(status=status, fallback_source=fallback, as_of_date=_latest_date(flow, date_col), warnings=warnings, missing_fields=_dedupe(missing_fields))
-    return ETFResearchPackage(symbol=admission.symbol, package_type="flow", status=status, quality=quality, metrics=_clean(metrics), raw_summary={"flow": _frame_summary(flow, source=_source_from_fallback(fallback), date_col=date_col), "share_column": share_col or "N/A"})
+    return ETFResearchPackage(
+        symbol=admission.symbol,
+        package_type="flow",
+        status=status,
+        quality=quality,
+        metrics=_clean(metrics),
+        raw_summary=_clean(
+            {
+                "qdii_context": _qdii_context(admission),
+                "flow": _frame_summary(flow, source=_source_from_fallback(fallback), date_col=date_col),
+                "share_column": share_col or "N/A",
+            }
+        ),
+    )
 
 
 def build_event_package(symbol: str, curr_date: str) -> ETFResearchPackage:
     admission = admit_etf(symbol)
     if not admission.is_supported:
         return _blocked_package(symbol, "event", admission, curr_date)
-    warnings = _dedupe(list(admission.quality.warnings) + ["ETF-specific structured event feed unavailable; no events invented"])
+    warnings = _append_qdii_warnings(_dedupe(list(admission.quality.warnings) + ["ETF-specific structured event feed unavailable; no events invented"]), admission)
     missing_fields = _dedupe(list(admission.quality.missing_fields) + ["etf_event_feed", "fund_announcements"])
     quality = DataQuality(status="partial", as_of_date=curr_date, warnings=warnings, missing_fields=missing_fields)
-    return ETFResearchPackage(symbol=admission.symbol, package_type="event", status="partial", quality=quality, raw_summary={"admission": admission.profile, "index_code": _profile_value(admission.profile, ("index_code", "指数代码")) or "N/A"})
+    return ETFResearchPackage(
+        symbol=admission.symbol,
+        package_type="event",
+        status="partial",
+        quality=quality,
+        raw_summary=_clean(
+            {
+                "admission": admission.profile,
+                "qdii_context": _qdii_context(admission),
+                "index_code": _profile_value(admission.profile, ("index_code", "指数代码")) or "N/A",
+            }
+        ),
+    )
 
 
 def _source_from_fallback(fallback: str) -> str:
