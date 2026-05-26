@@ -21,6 +21,9 @@ The reusable analysis entry points already exist:
 Scope boundaries for this version:
 
 - Provide an HTTP analysis service and Markdown report download.
+- Require one shared API token from `.env` for all analysis and report endpoints.
+- Keep token auth simple: clients send `Authorization: Bearer <ANALYSIS_API_TOKEN>`.
+- Leave `/healthz` unauthenticated so local process supervisors can check service health.
 - Store job state only in memory while the API process is alive.
 - Keep generated reports on the existing local filesystem path produced by `TradingAgentsGraph._generate_report(...)`.
 - Do not add Redis, Celery/RQ, SQLite, Postgres, object storage, static database files, or a frontend/static site.
@@ -54,6 +57,9 @@ Root cause: `tests/test_analyze_asset_type.py` expects `parse_args(... --asset-t
 - Modify `requirements.txt`
   - Add `fastapi` and `uvicorn[standard]` for non-PEP-621 installs.
 
+- Modify `.env.example`
+  - Add `ANALYSIS_API_TOKEN` as the single shared credential for local/intranet API requests.
+
 - Create `tradingagents/services/__init__.py`
   - Package marker for service layer imports.
 
@@ -83,7 +89,7 @@ Root cause: `tests/test_analyze_asset_type.py` expects `parse_args(... --asset-t
   - Unit tests for request normalization, date resolution, config construction, and patched analysis execution.
 
 - Create `tests/test_analysis_api.py`
-  - API tests for create/get/result/report download flows using a synchronous fake runner.
+  - API tests for token auth, create/get/result/report download flows using a synchronous fake runner.
 
 - Modify `README.md`
   - Add local/intranet API service usage, systemd deployment, endpoint examples, and report download commands.
@@ -178,11 +184,12 @@ git commit -m "fix: restore analyze asset type CLI option"
 
 ---
 
-## Task 1: Add API Dependencies and Entry Point
+## Task 1: Add API Dependencies, Entry Point, and Token Env
 
 **Files:**
 - Modify: `pyproject.toml`
 - Modify: `requirements.txt`
+- Modify: `.env.example`
 
 - [ ] **Step 1: Add a dependency regression test by checking package metadata**
 
@@ -195,6 +202,7 @@ text = Path("pyproject.toml").read_text()
 assert '"fastapi>=' in text
 assert '"uvicorn[standard]>=' in text
 assert 'etf-stock-agent-api = "tradingagents.api.main:run"' in text
+assert "ANALYSIS_API_TOKEN=" in Path(".env.example").read_text()
 PY
 ```
 
@@ -224,7 +232,18 @@ fastapi
 uvicorn[standard]
 ```
 
-- [ ] **Step 4: Verify metadata**
+- [ ] **Step 4: Add API token placeholder to `.env.example`**
+
+Append this block to `.env.example`:
+
+```text
+# Local/intranet API shared token
+# Required for all /api/v1/* endpoints. Send as:
+# Authorization: Bearer <ANALYSIS_API_TOKEN>
+ANALYSIS_API_TOKEN=
+```
+
+- [ ] **Step 5: Verify metadata and token placeholder**
 
 Run:
 
@@ -238,16 +257,17 @@ assert 'etf-stock-agent-api = "tradingagents.api.main:run"' in text
 req = Path("requirements.txt").read_text()
 assert "fastapi" in req
 assert "uvicorn[standard]" in req
+assert "ANALYSIS_API_TOKEN=" in Path(".env.example").read_text()
 PY
 ```
 
 Expected: PASS with no output.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add pyproject.toml requirements.txt
-git commit -m "chore: add API service dependencies"
+git add pyproject.toml requirements.txt .env.example
+git commit -m "chore: add API service dependencies and token env"
 ```
 
 ---
@@ -862,7 +882,7 @@ git commit -m "feat: add analysis job runner"
 
 ---
 
-## Task 5: Add FastAPI App and Endpoints
+## Task 5: Add Token-Protected FastAPI App and Endpoints
 
 **Files:**
 - Create: `tradingagents/api/main.py`
@@ -873,7 +893,9 @@ git commit -m "feat: add analysis job runner"
 Create `tests/test_analysis_api.py`:
 
 ```python
+import os
 import unittest
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -911,28 +933,62 @@ class FakeRunner:
 class AnalysisApiTests(unittest.TestCase):
     def setUp(self):
         self.store = JobStore()
+        self.env = patch.dict(os.environ, {"ANALYSIS_API_TOKEN": "test-token"})
+        self.env.start()
+        self.addCleanup(self.env.stop)
         self.app = create_app(store=self.store, runner=FakeRunner(self.store))
         self.client = TestClient(self.app)
+        self.headers = {"Authorization": "Bearer test-token"}
+
+    def test_healthz_does_not_require_token(self):
+        response = self.client.get("/healthz")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"status": "ok"})
+
+    def test_create_job_requires_token(self):
+        response = self.client.post(
+            "/api/v1/analysis/jobs",
+            json={"tickers": ["600519"], "date": "2026-05-22"},
+        )
+
+        self.assertEqual(response.status_code, 401)
 
     def test_create_and_read_job_result(self):
         created = self.client.post(
             "/api/v1/analysis/jobs",
+            headers=self.headers,
             json={"tickers": ["600519"], "date": "2026-05-22"},
         )
 
         self.assertEqual(created.status_code, 201)
         job_id = created.json()["job_id"]
 
-        detail = self.client.get(f"/api/v1/analysis/jobs/{job_id}")
+        detail = self.client.get(f"/api/v1/analysis/jobs/{job_id}", headers=self.headers)
         self.assertEqual(detail.status_code, 200)
         self.assertEqual(detail.json()["status"], "success")
 
-        result = self.client.get(f"/api/v1/analysis/jobs/{job_id}/result")
+        result = self.client.get(f"/api/v1/analysis/jobs/{job_id}/result", headers=self.headers)
         self.assertEqual(result.status_code, 200)
         self.assertEqual(result.json()["result"]["status"], "success")
 
     def test_unknown_job_returns_404(self):
-        response = self.client.get("/api/v1/analysis/jobs/missing")
+        response = self.client.get("/api/v1/analysis/jobs/missing", headers=self.headers)
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_report_endpoint_returns_404_when_report_missing(self):
+        created = self.client.post(
+            "/api/v1/analysis/jobs",
+            headers=self.headers,
+            json={"tickers": ["600519"], "date": "2026-05-22"},
+        )
+        job_id = created.json()["job_id"]
+
+        response = self.client.get(
+            f"/api/v1/analysis/jobs/{job_id}/reports/600519",
+            headers=self.headers,
+        )
 
         self.assertEqual(response.status_code, 404)
 
@@ -959,10 +1015,12 @@ Create `tradingagents/api/main.py`:
 from __future__ import annotations
 
 import os
-from typing import Optional
+from pathlib import Path
+from typing import Annotated, Optional
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Response, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Response, status
+from fastapi.responses import FileResponse
 
 from tradingagents.api.job_store import JobStore
 from tradingagents.api.runner import AnalysisJobRunner
@@ -973,6 +1031,14 @@ from tradingagents.api.schemas import (
     AnalysisResultResponse,
 )
 from tradingagents.services.analysis_service import AnalysisRequest
+
+
+def require_api_token(authorization: Annotated[Optional[str], Header()] = None) -> None:
+    expected = os.getenv("ANALYSIS_API_TOKEN")
+    if not expected:
+        raise HTTPException(status_code=500, detail="ANALYSIS_API_TOKEN is not configured")
+    if authorization != f"Bearer {expected}":
+        raise HTTPException(status_code=401, detail="invalid or missing API token")
 
 
 def _to_request(payload: AnalysisJobCreate) -> AnalysisRequest:
@@ -1017,18 +1083,27 @@ def create_app(
         "/api/v1/analysis/jobs",
         response_model=AnalysisJobSummary,
         status_code=status.HTTP_201_CREATED,
+        dependencies=[Depends(require_api_token)],
     )
     def create_analysis_job(payload: AnalysisJobCreate) -> dict:
         return app.state.job_runner.submit(_to_request(payload))
 
-    @app.get("/api/v1/analysis/jobs/{job_id}", response_model=AnalysisJobDetail)
+    @app.get(
+        "/api/v1/analysis/jobs/{job_id}",
+        response_model=AnalysisJobDetail,
+        dependencies=[Depends(require_api_token)],
+    )
     def get_analysis_job(job_id: str) -> dict:
         job = app.state.job_store.get_job(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="job not found")
         return job
 
-    @app.get("/api/v1/analysis/jobs/{job_id}/result", response_model=AnalysisResultResponse)
+    @app.get(
+        "/api/v1/analysis/jobs/{job_id}/result",
+        response_model=AnalysisResultResponse,
+        dependencies=[Depends(require_api_token)],
+    )
     def get_analysis_job_result(job_id: str, response: Response) -> dict:
         job = app.state.job_store.get_job(job_id)
         if job is None:
@@ -1041,6 +1116,31 @@ def create_app(
             "result": job.get("result"),
             "error": job.get("error"),
         }
+
+    @app.get(
+        "/api/v1/analysis/jobs/{job_id}/reports/{ticker}",
+        dependencies=[Depends(require_api_token)],
+    )
+    def get_analysis_report(job_id: str, ticker: str) -> FileResponse:
+        job = app.state.job_store.get_job(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="job not found")
+        result = job.get("result") or {}
+        for item in result.get("results", []):
+            if item.get("ticker") != ticker:
+                continue
+            report_path = item.get("report_path")
+            if not report_path:
+                raise HTTPException(status_code=404, detail="report path not available")
+            path = Path(report_path)
+            if not path.exists() or not path.is_file():
+                raise HTTPException(status_code=404, detail="report file not found")
+            return FileResponse(
+                path=str(path),
+                media_type="text/markdown; charset=utf-8",
+                filename=path.name,
+            )
+        raise HTTPException(status_code=404, detail="ticker result not found")
 
     return app
 
@@ -1069,7 +1169,7 @@ Run:
 python3 -m unittest tests.test_analysis_api -v
 ```
 
-Expected: PASS, 2 tests.
+Expected: PASS, 5 tests.
 
 - [ ] **Step 5: Run full tests**
 
@@ -1090,96 +1190,8 @@ git commit -m "feat: expose analysis job API"
 
 ---
 
-## Task 6: Add Report Download Endpoint
 
-**Files:**
-- Modify: `tradingagents/api/main.py`
-- Test: `tests/test_analysis_api.py`
-
-- [ ] **Step 1: Add failing report endpoint test**
-
-Append this test method to `AnalysisApiTests` in `tests/test_analysis_api.py`:
-
-```python
-    def test_report_endpoint_returns_404_when_report_missing(self):
-        created = self.client.post(
-            "/api/v1/analysis/jobs",
-            json={"tickers": ["600519"], "date": "2026-05-22"},
-        )
-        job_id = created.json()["job_id"]
-
-        response = self.client.get(f"/api/v1/analysis/jobs/{job_id}/reports/600519")
-
-        self.assertEqual(response.status_code, 404)
-```
-
-- [ ] **Step 2: Run API tests to verify failure**
-
-Run:
-
-```bash
-python3 -m unittest tests.test_analysis_api -v
-```
-
-Expected: FAIL because the report route does not exist.
-
-- [ ] **Step 3: Add report route imports**
-
-In `tradingagents/api/main.py`, add:
-
-```python
-from pathlib import Path
-from fastapi.responses import FileResponse
-```
-
-- [ ] **Step 4: Add report route inside `create_app`**
-
-Add this route after `get_analysis_job_result`:
-
-```python
-    @app.get("/api/v1/analysis/jobs/{job_id}/reports/{ticker}")
-    def get_analysis_report(job_id: str, ticker: str) -> FileResponse:
-        job = app.state.job_store.get_job(job_id)
-        if job is None:
-            raise HTTPException(status_code=404, detail="job not found")
-        result = job.get("result") or {}
-        for item in result.get("results", []):
-            if item.get("ticker") != ticker:
-                continue
-            report_path = item.get("report_path")
-            if not report_path:
-                raise HTTPException(status_code=404, detail="report path not available")
-            path = Path(report_path)
-            if not path.exists() or not path.is_file():
-                raise HTTPException(status_code=404, detail="report file not found")
-            return FileResponse(
-                path=str(path),
-                media_type="text/markdown; charset=utf-8",
-                filename=path.name,
-            )
-        raise HTTPException(status_code=404, detail="ticker result not found")
-```
-
-- [ ] **Step 5: Run API tests**
-
-Run:
-
-```bash
-python3 -m unittest tests.test_analysis_api -v
-```
-
-Expected: PASS.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add tradingagents/api/main.py tests/test_analysis_api.py
-git commit -m "feat: add analysis report download endpoint"
-```
-
----
-
-## Task 7: Document API Usage
+## Task 6: Document API Usage
 
 **Files:**
 - Modify: `README.md`
@@ -1193,8 +1205,11 @@ python3 - <<'PY'
 from pathlib import Path
 text = Path("README.md").read_text()
 assert "## API Service" in text
+assert "ANALYSIS_API_TOKEN" in text
+assert "Authorization: Bearer" in text
 assert "POST /api/v1/analysis/jobs" in text
 assert "GET /api/v1/analysis/jobs/{job_id}/result" in text
+assert "systemd" in text
 PY
 ```
 
@@ -1207,6 +1222,14 @@ Append this section to `README.md`:
 ```markdown
 ## API Service
 
+The API service is intended for local or intranet deployment. It keeps job state in memory only, writes reports to the existing local report directory, and does not use Redis, SQL databases, or static database files.
+
+Configure a single shared token in `.env`:
+
+```bash
+ANALYSIS_API_TOKEN=replace-with-a-long-random-string
+```
+
 Start the local API server:
 
 ```bash
@@ -1217,6 +1240,7 @@ Submit an asynchronous stock analysis job:
 
 ```bash
 curl -sS -X POST http://127.0.0.1:8000/api/v1/analysis/jobs \
+  -H 'Authorization: Bearer replace-with-a-long-random-string' \
   -H 'Content-Type: application/json' \
   -d '{
     "tickers": ["600519"],
@@ -1234,6 +1258,7 @@ Submit an A-share ETF job:
 
 ```bash
 curl -sS -X POST http://127.0.0.1:8000/api/v1/analysis/jobs \
+  -H 'Authorization: Bearer replace-with-a-long-random-string' \
   -H 'Content-Type: application/json' \
   -d '{
     "tickers": ["159949"],
@@ -1246,19 +1271,42 @@ curl -sS -X POST http://127.0.0.1:8000/api/v1/analysis/jobs \
 Check job state:
 
 ```bash
-curl -sS http://127.0.0.1:8000/api/v1/analysis/jobs/{job_id}
+curl -sS http://127.0.0.1:8000/api/v1/analysis/jobs/{job_id} \
+  -H 'Authorization: Bearer replace-with-a-long-random-string'
 ```
 
 Read final result:
 
 ```bash
-curl -sS http://127.0.0.1:8000/api/v1/analysis/jobs/{job_id}/result
+curl -sS http://127.0.0.1:8000/api/v1/analysis/jobs/{job_id}/result \
+  -H 'Authorization: Bearer replace-with-a-long-random-string'
 ```
 
 Download a generated Markdown report:
 
 ```bash
-curl -sS -o report.md http://127.0.0.1:8000/api/v1/analysis/jobs/{job_id}/reports/600519
+curl -sS -o report.md http://127.0.0.1:8000/api/v1/analysis/jobs/{job_id}/reports/600519 \
+  -H 'Authorization: Bearer replace-with-a-long-random-string'
+```
+
+Minimal systemd deployment on a local or intranet host:
+
+```ini
+[Unit]
+Description=ETF Stock Agent API
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/Users/minlong_1/Desktop/Github/etf-stock-agent
+EnvironmentFile=/Users/minlong_1/Desktop/Github/etf-stock-agent/.env
+Environment=ANALYSIS_API_WORKERS=1
+ExecStart=/opt/homebrew/bin/python3 -m uvicorn tradingagents.api.main:app --host 0.0.0.0 --port 8000
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
 ```
 
 The API runs analysis in background worker processes because the underlying dataflow configuration is process-level. Keep `ANALYSIS_API_WORKERS` small enough for your LLM and data-provider rate limits.
@@ -1273,8 +1321,11 @@ python3 - <<'PY'
 from pathlib import Path
 text = Path("README.md").read_text()
 assert "## API Service" in text
+assert "ANALYSIS_API_TOKEN" in text
+assert "Authorization: Bearer" in text
 assert "POST /api/v1/analysis/jobs" in text
 assert "GET /api/v1/analysis/jobs/{job_id}/result" in text
+assert "systemd" in text
 PY
 ```
 
@@ -1289,7 +1340,7 @@ git commit -m "docs: document analysis API service"
 
 ---
 
-## Task 8: Local Smoke Test Without Live LLM Calls
+## Task 7: Local Smoke Test Without Live LLM Calls
 
 **Files:**
 - No source changes expected
@@ -1327,7 +1378,7 @@ Expected: PASS.
 Run:
 
 ```bash
-ANALYSIS_API_WORKERS=1 python3 -m uvicorn tradingagents.api.main:app --host 127.0.0.1 --port 8000
+ANALYSIS_API_TOKEN=local-test-token ANALYSIS_API_WORKERS=1 python3 -m uvicorn tradingagents.api.main:app --host 127.0.0.1 --port 8000
 ```
 
 Expected output includes:
@@ -1366,7 +1417,7 @@ Expected: no uncommitted files from smoke testing.
 
 ---
 
-## Task 9: Optional Live API Analysis Smoke Test
+## Task 8: Optional Live API Analysis Smoke Test
 
 **Files:**
 - No source changes expected
@@ -1378,7 +1429,7 @@ Run one of these, depending on provider:
 ```bash
 python3 - <<'PY'
 import os
-required = ["DEEPSEEK_API_KEY"]
+required = ["DEEPSEEK_API_KEY", "ANALYSIS_API_TOKEN"]
 missing = [name for name in required if not os.getenv(name)]
 if missing:
     raise SystemExit(f"Missing env vars: {', '.join(missing)}")
@@ -1407,6 +1458,7 @@ Run in a second shell:
 
 ```bash
 curl -sS -X POST http://127.0.0.1:8000/api/v1/analysis/jobs \
+  -H "Authorization: Bearer $ANALYSIS_API_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"tickers":["600519"],"date":"2026-05-22","level":1,"asset_type":"stock"}'
 ```
@@ -1418,7 +1470,8 @@ Expected: JSON with `"job_id"` and `"status":"running"` or `"status":"success"`.
 Replace `<job_id>` with the returned ID:
 
 ```bash
-curl -sS http://127.0.0.1:8000/api/v1/analysis/jobs/<job_id>/result
+curl -sS http://127.0.0.1:8000/api/v1/analysis/jobs/<job_id>/result \
+  -H "Authorization: Bearer $ANALYSIS_API_TOKEN"
 ```
 
 Expected while running:
@@ -1439,7 +1492,7 @@ Press `Ctrl-C` in the uvicorn shell.
 
 ---
 
-## Task 10: Finishing Branch Gate
+## Task 9: Finishing Branch Gate
 
 **Files:**
 - No source changes expected unless tests reveal defects
@@ -1533,7 +1586,7 @@ git push -u origin <feature-branch>
 gh pr create --title "Add analysis API service" --body "$(cat <<'EOF'
 ## Summary
 - Add a reusable analysis service layer around analyze.py primitives
-- Add FastAPI job endpoints for asynchronous analysis, events, results, and report downloads
+- Add FastAPI job endpoints for asynchronous analysis, results, and report downloads
 - Document API startup and curl usage
 
 ## Test Plan

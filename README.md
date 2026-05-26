@@ -168,6 +168,106 @@ python analyze.py 159949 510300 --asset-type etf -l 3 -w 2
 
 The repository ignores `.env`, `.env.*`, generated reports, caches, credentials, and local worktrees. Keep real API keys only in your local shell environment or an untracked `.env` file.
 
+## API Service
+
+The API service is intended for local or intranet deployment. It keeps job state in memory only, writes reports to the existing local report directory, and does not use Redis, SQL databases, or static database files.
+
+Configure a single shared token in `.env`:
+
+```bash
+ANALYSIS_API_TOKEN=replace-with-a-long-random-string
+```
+
+Start the local API server:
+
+```bash
+python3 -m uvicorn tradingagents.api.main:app --host 127.0.0.1 --port 8000
+```
+
+Endpoints:
+
+```text
+POST /api/v1/analysis/jobs
+GET /api/v1/analysis/jobs/{job_id}
+GET /api/v1/analysis/jobs/{job_id}/result
+GET /api/v1/analysis/jobs/{job_id}/reports/{ticker}
+```
+
+Submit an asynchronous stock analysis job:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8000/api/v1/analysis/jobs \
+  -H 'Authorization: Bearer replace-with-a-long-random-string' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "tickers": ["600519"],
+    "date": "2026-05-22",
+    "level": 2,
+    "asset_type": "stock",
+    "provider": "deepseek",
+    "quick_model": "deepseek-v4-flash",
+    "deep_model": "deepseek-v4-flash",
+    "cn_vendor": "tushare"
+  }'
+```
+
+Submit an A-share ETF job:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8000/api/v1/analysis/jobs \
+  -H 'Authorization: Bearer replace-with-a-long-random-string' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "tickers": ["159949"],
+    "date": "2026-05-22",
+    "level": 3,
+    "asset_type": "etf"
+  }'
+```
+
+Check job state:
+
+```bash
+curl -sS http://127.0.0.1:8000/api/v1/analysis/jobs/{job_id} \
+  -H 'Authorization: Bearer replace-with-a-long-random-string'
+```
+
+Read final result:
+
+```bash
+curl -sS http://127.0.0.1:8000/api/v1/analysis/jobs/{job_id}/result \
+  -H 'Authorization: Bearer replace-with-a-long-random-string'
+```
+
+Download a generated Markdown report:
+
+```bash
+curl -sS -o report.md http://127.0.0.1:8000/api/v1/analysis/jobs/{job_id}/reports/600519 \
+  -H 'Authorization: Bearer replace-with-a-long-random-string'
+```
+
+Minimal systemd deployment on a local or intranet host:
+
+```ini
+[Unit]
+Description=ETF Stock Agent API
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/Users/minlong_1/Desktop/Github/etf-stock-agent
+EnvironmentFile=/Users/minlong_1/Desktop/Github/etf-stock-agent/.env
+Environment=ANALYSIS_API_WORKERS=1
+ExecStart=/opt/homebrew/bin/python3 -m uvicorn tradingagents.api.main:app --host 0.0.0.0 --port 8000
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+The API runs analysis in background worker processes because the underlying dataflow configuration is process-level. Keep `ANALYSIS_API_WORKERS` small enough for your LLM and data-provider rate limits.
+
 ## Verification
 
 ```bash
