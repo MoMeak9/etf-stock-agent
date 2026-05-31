@@ -41,6 +41,18 @@ class FundResearchServiceTests(unittest.TestCase):
         self.assertAlmostEqual(package.metrics["latest_nav"], 1.10)
         self.assertEqual(package.quality.as_of_date, "2024-01-04")
 
+    def test_build_nav_package_uses_normalized_admission_symbol_for_provider_calls(self):
+        from tradingagents.dataflows.fund_research_service import build_nav_package
+
+        nav = pd.DataFrame([{"nav_date": "20240104", "unit_nav": "1.10"}])
+        with patch("tradingagents.dataflows.fund_research_service.admit_fund", return_value=self._admission()), patch(
+            "tradingagents.dataflows.tushare_fund.fetch_fund_nav", return_value=nav
+        ) as ts_fetch:
+            package = build_nav_package(" 008763 ", "2024-01-04")
+
+        self.assertEqual(package.symbol, "008763")
+        self.assertEqual(ts_fetch.call_args.args[0], "008763")
+
     def test_build_product_package_records_missing_purchase_status(self):
         from tradingagents.dataflows.fund_research_service import build_product_package
 
@@ -51,6 +63,26 @@ class FundResearchServiceTests(unittest.TestCase):
             package = build_product_package("008763", "2024-01-04")
 
         self.assertEqual(package.package_type, "product")
+        self.assertEqual(package.status, "partial")
+        self.assertIn("purchase_status", package.quality.missing_fields)
+        self.assertIn("redemption_status", package.quality.missing_fields)
+
+    def test_build_product_package_treats_blank_and_nan_statuses_as_missing(self):
+        from tradingagents.dataflows.fund_research_service import build_product_package
+
+        with patch(
+            "tradingagents.dataflows.fund_research_service.admit_fund",
+            return_value=self._admission(
+                profile={
+                    "name": "测试基金",
+                    "fund_type": "混合型",
+                    "purchase_status": "   ",
+                    "redemption_status": float("nan"),
+                }
+            ),
+        ):
+            package = build_product_package("008763", "2024-01-04")
+
         self.assertEqual(package.status, "partial")
         self.assertIn("purchase_status", package.quality.missing_fields)
         self.assertIn("redemption_status", package.quality.missing_fields)
@@ -85,6 +117,24 @@ class FundResearchServiceTests(unittest.TestCase):
         self.assertIn("global_macro_news", package.raw_summary)
         self.assertIn("fx", package.metrics["macro_focus"])
         self.assertEqual(package.metrics["analysis_horizon"], "medium_to_long_term")
+
+    def test_build_macro_package_degrades_when_global_macro_news_raises(self):
+        from tradingagents.dataflows.fund_research_service import build_macro_package
+
+        with patch(
+            "tradingagents.dataflows.fund_research_service.admit_fund",
+            return_value=self._admission(fund_type="qdii", profile={"name": "QDII基金", "fund_type": "QDII"}),
+        ), patch(
+            "tradingagents.dataflows.fund_research_service.fetch_global_macro_news",
+            side_effect=RuntimeError("news backend down"),
+        ):
+            package = build_macro_package("008763", "2024-01-04")
+
+        self.assertEqual(package.package_type, "macro")
+        self.assertEqual(package.status, "partial")
+        self.assertIn("global_macro_news", package.quality.missing_fields)
+        self.assertTrue(any("news backend down" in warning for warning in package.quality.warnings))
+        self.assertEqual(package.raw_summary["global_macro_news"], "")
 
 
 if __name__ == "__main__":

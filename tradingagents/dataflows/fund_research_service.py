@@ -149,6 +149,20 @@ def _profile_value(profile: dict[str, Any], candidates: tuple[str, ...]):
     return None
 
 
+def _present(value: Any) -> bool:
+    if value is None:
+        return False
+    try:
+        if pd.isna(value):
+            return False
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, str):
+        stripped = value.strip()
+        return bool(stripped) and stripped.lower() != "nan"
+    return True
+
+
 def _has_numeric_nav(frame: Any) -> bool:
     column = _pick_column(frame, NAV_COLUMNS)
     if not column:
@@ -186,8 +200,8 @@ def build_nav_package(symbol: str, curr_date: str) -> FundResearchPackage:
 
     start = _date_lookback(curr_date, 365)
     nav, fallback, warnings = _call_with_fallback(
-        lambda: tushare_fund.fetch_fund_nav(symbol, start, curr_date),
-        lambda: akshare_fund.fetch_fund_nav(symbol, start, curr_date),
+        lambda: tushare_fund.fetch_fund_nav(admission.symbol, start, curr_date),
+        lambda: akshare_fund.fetch_fund_nav(admission.symbol, start, curr_date),
         validator=_has_numeric_nav,
         validation_label="unit_nav/fund_nav",
     )
@@ -234,9 +248,9 @@ def build_product_package(symbol: str, curr_date: str) -> FundResearchPackage:
     missing_fields = list(admission.quality.missing_fields)
     purchase_status = _profile_value(profile, ("purchase_status", "申购状态", "申购状态说明"))
     redemption_status = _profile_value(profile, ("redemption_status", "赎回状态", "赎回状态说明"))
-    if purchase_status is None:
+    if not _present(purchase_status):
         missing_fields.append("purchase_status")
-    if redemption_status is None:
+    if not _present(redemption_status):
         missing_fields.append("redemption_status")
     warnings = list(admission.quality.warnings)
     status = _status(missing_fields, warnings)
@@ -315,7 +329,12 @@ def build_macro_package(symbol: str, curr_date: str) -> FundResearchPackage:
     if not admission.is_supported:
         return _blocked(symbol, "macro", admission, curr_date)
 
-    global_macro_news = fetch_global_macro_news(curr_date, look_back_days=30, limit=10)
+    warnings = list(admission.quality.warnings)
+    try:
+        global_macro_news = fetch_global_macro_news(curr_date, look_back_days=30, limit=10)
+    except Exception as exc:
+        global_macro_news = ""
+        warnings.append(f"global_macro_news unavailable: {exc}")
     if isinstance(global_macro_news, dict):
         global_macro_text = "\n".join(str(value) for value in global_macro_news.values() if value)
     else:
@@ -323,7 +342,6 @@ def build_macro_package(symbol: str, curr_date: str) -> FundResearchPackage:
     missing_fields = list(admission.quality.missing_fields)
     if not global_macro_text.strip():
         missing_fields.append("global_macro_news")
-    warnings = list(admission.quality.warnings)
     status = _status(missing_fields, warnings)
     quality = FundDataQuality(
         status=status,
