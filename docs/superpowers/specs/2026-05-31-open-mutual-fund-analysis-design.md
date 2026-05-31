@@ -4,7 +4,7 @@
 
 Add a dedicated `fund` asset type for ordinary open-ended public mutual funds, including QDII, bond funds, money-market funds, equity funds, hybrid funds, index funds, and FOFs.
 
-The first version serves single-fund subscription, redemption, holding, watchlist, and dollar-cost-averaging decisions. It must not treat open-ended funds as stocks or exchange-traded ETF products.
+The first version serves single-fund subscription, redemption, holding, watchlist, and dollar-cost-averaging decisions. Analysis should be long-term and macro-aware by default. It must not treat open-ended funds as stocks or exchange-traded ETF products.
 
 Example target:
 
@@ -21,6 +21,7 @@ python analyze.py 008763 --asset-type fund -l 3
 - Do not add intraday trading, stop-loss, target-price, or secondary-market technical trading recommendations for open-ended funds.
 - Do not merge ordinary funds into the existing ETF analysis path.
 - Do not perform broad asset framework refactoring across stock, ETF, and fund in this phase.
+- Do not build a full macroeconomic data platform in this phase; use a compact macro context package and explicit data-quality warnings.
 
 ## 3. Architecture
 
@@ -41,6 +42,7 @@ New modules:
 - `tradingagents/dataflows/akshare_fund.py`
 - `tradingagents/dataflows/fund_research_service.py`
 - `tradingagents/agents/utils/fund_data_tools.py`
+- `tradingagents/agents/utils/fund_macro_tools.py` if macro context grows beyond a single fund data tool.
 - `tradingagents/agents/analysts/fund_nav_analyst.py`
 - `tradingagents/agents/analysts/fund_product_analyst.py`
 - `tradingagents/agents/analysts/fund_portfolio_analyst.py`
@@ -238,21 +240,41 @@ Fields and metrics:
 
 If peer ranking is unavailable, degrade to self-history and benchmark comparison. Do not fabricate peer ranks.
 
+### 6.7 Fund Macro Package
+
+Purpose: add long-term macro context to open-ended fund analysis.
+
+First-version inputs:
+
+- global macro and market news already available through the existing `get_global_news` vendor route
+- fund-type-specific macro focus generated from registry classification
+- optional structured macro indicators when available from supported vendors
+
+Macro focus by fund type:
+
+- `qdii`: overseas equity market cycle, country or region policy, FX risk, RMB exchange-rate context, overseas interest-rate environment, geopolitical and holiday mismatch risks.
+- `bond`: central-bank policy, yield-curve direction, credit spreads, liquidity, inflation, and duration risk.
+- `money_market`: short-term rates, liquidity conditions, money-market yield direction, redemption pressure, and regulatory or seasonal cash stress.
+- `equity`, `hybrid`, `index`: economic growth, liquidity cycle, sector cycle, risk appetite, valuation regime, and policy environment.
+- `fof`: cross-asset allocation cycle, equity-bond balance, global risk appetite, and double-layer fee drag under lower-return regimes.
+
+The macro package must be treated as context, not as a precise forecast. Missing macro data should degrade the report and force conservative wording.
+
 ## 7. Analysts
 
 First version uses four fund analysts:
 
 - `fund_nav_analyst`: NAV trend, drawdown, volatility, and return quality.
 - `fund_product_analyst`: product structure, fees, scale, risk level, purchase and redemption suitability.
-- `fund_portfolio_analyst`: holdings, asset allocation, region or industry exposure, concentration, style drift.
+- `fund_portfolio_analyst`: holdings, asset allocation, region or industry exposure, concentration, style drift, and macro fit.
 - `fund_event_analyst`: announcements, purchase limits, manager changes, dividends, operational risk.
 
 Package consumption:
 
-- `fund_nav_analyst` consumes NAV and performance packages.
+- `fund_nav_analyst` consumes NAV, performance, and macro packages.
 - `fund_product_analyst` consumes product and manager packages.
-- `fund_portfolio_analyst` consumes portfolio package.
-- `fund_event_analyst` consumes event package.
+- `fund_portfolio_analyst` consumes portfolio and macro packages.
+- `fund_event_analyst` consumes event and macro packages.
 
 Recommended default analyst set:
 
@@ -301,6 +323,8 @@ Type-specific focus:
 - `equity`, `hybrid`, `index`: concentration, industry exposure, manager style, drawdown control, benchmark and peer context.
 - `fof`: underlying fund allocation, diversification, double-layer fees, manager allocation ability.
 - `unknown`: conservative analysis with explicit type uncertainty.
+
+All fund prompts should explicitly favor a medium-to-long-term perspective. The report should discuss whether the fund fits a multi-month to multi-year allocation or holding plan, rather than reacting only to recent NAV movement.
 
 ## 9. Entry Points
 
