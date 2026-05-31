@@ -22,11 +22,23 @@ def _first_record(df) -> dict[str, Any]:
     return {str(key): value for key, value in df.iloc[0].to_dict().items()}
 
 
-def classify_fund(profile: dict[str, Any]) -> str:
-    text = " ".join(
+def _profile_text(profile: dict[str, Any]) -> str:
+    return " ".join(
         str(profile.get(key, ""))
         for key in ("fund_type", "基金类型", "type", "name", "基金简称", "fullname")
     )
+
+
+def _is_exchange_traded_profile(profile: dict[str, Any]) -> bool:
+    text = _profile_text(profile)
+    lowered = text.lower()
+    return any(token in lowered for token in ("lof", "reit", "reits")) or any(
+        token in text for token in ("封闭", "封基", "场内")
+    )
+
+
+def classify_fund(profile: dict[str, Any]) -> str:
+    text = _profile_text(profile)
     lowered = text.lower()
     if "qdii" in lowered:
         return "qdii"
@@ -104,6 +116,28 @@ def admit_fund(symbol: str) -> FundAdmission:
                 fallback_source = "akshare"
         except Exception as exc:
             warnings.append(f"fund_basic unavailable from akshare: {exc}")
+
+    if profile and _is_exchange_traded_profile(profile):
+        admission = FundAdmission(
+            symbol=normalized,
+            ts_code=ts_code,
+            is_supported=False,
+            fund_type="exchange_traded",
+            reason=(
+                "Exchange-traded fund products are out of scope for fund mode; "
+                "use a dedicated exchange-traded fund asset type when supported."
+            ),
+            profile=profile,
+            quality=FundDataQuality(
+                status="blocked",
+                primary_source=primary_source,
+                fallback_source=fallback_source,
+                warnings=warnings,
+                missing_fields=["open_ended_fund"],
+            ),
+        )
+        _ADMISSION_CACHE[normalized] = admission
+        return admission
 
     fund_type = classify_fund(profile)
     is_supported = bool(profile)

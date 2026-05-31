@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 import pandas as pd
 
+from tradingagents.dataflows import tushare_fund
 from tradingagents.dataflows.fund_registry import admit_fund, classify_fund, clear_fund_admission_cache
 
 
@@ -97,6 +98,57 @@ class FundRegistryTests(unittest.TestCase):
         self.assertFalse(admission.is_supported)
         self.assertEqual(admission.quality.status, "blocked")
         self.assertIn("fund_basic", admission.quality.missing_fields)
+
+    def test_tushare_fund_basic_uses_open_fund_market_for_primary_call(self):
+        class FakePro:
+            def __init__(self):
+                self.calls = []
+
+            def fund_basic(self, **kwargs):
+                self.calls.append(kwargs)
+                return pd.DataFrame([{"ts_code": "008763.OF"}])
+
+        fake_pro = FakePro()
+        with patch("tradingagents.dataflows.tushare_fund._get_tushare_api", return_value=fake_pro):
+            result = tushare_fund.fetch_fund_basic("008763")
+
+        self.assertFalse(result.empty)
+        self.assertEqual(fake_pro.calls, [{"ts_code": "008763.OF", "market": "O"}])
+
+    def test_tushare_fund_basic_uses_open_fund_market_for_fallback_call(self):
+        class FakePro:
+            def __init__(self):
+                self.calls = []
+
+            def fund_basic(self, **kwargs):
+                self.calls.append(kwargs)
+                if "ts_code" in kwargs:
+                    raise TypeError("unexpected keyword argument 'ts_code'")
+                return pd.DataFrame([{"ts_code": "008763.OF"}, {"ts_code": "009999.OF"}])
+
+        fake_pro = FakePro()
+        with patch("tradingagents.dataflows.tushare_fund._get_tushare_api", return_value=fake_pro):
+            result = tushare_fund.fetch_fund_basic("008763")
+
+        self.assertEqual(result.iloc[0]["ts_code"], "008763.OF")
+        self.assertEqual(fake_pro.calls, [{"ts_code": "008763.OF", "market": "O"}, {"market": "O"}])
+
+    def test_blocks_exchange_traded_fund_type_after_metadata_fetch(self):
+        profile = pd.DataFrame(
+            [
+                {
+                    "ts_code": "501225.OF",
+                    "name": "华夏海外收益债券发起式(QDII-LOF)",
+                    "fund_type": "QDII-LOF",
+                }
+            ]
+        )
+        with patch("tradingagents.dataflows.tushare_fund.fetch_fund_basic", return_value=profile):
+            admission = admit_fund("501225")
+
+        self.assertFalse(admission.is_supported)
+        self.assertEqual(admission.quality.status, "blocked")
+        self.assertIn("exchange-traded fund", admission.reason.lower())
 
 
 if __name__ == "__main__":
