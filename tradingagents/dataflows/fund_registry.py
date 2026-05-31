@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from tradingagents.dataflows.fund_models import FundAdmission, FundDataQuality
@@ -21,7 +22,7 @@ def _first_record(df) -> dict[str, Any]:
     return {str(key): value for key, value in df.iloc[0].to_dict().items()}
 
 
-def _normalize_fund_type(profile: dict[str, Any]) -> str:
+def classify_fund(profile: dict[str, Any]) -> str:
     text = " ".join(
         str(profile.get(key, ""))
         for key in ("fund_type", "基金类型", "type", "name", "基金简称", "fullname")
@@ -29,17 +30,38 @@ def _normalize_fund_type(profile: dict[str, Any]) -> str:
     lowered = text.lower()
     if "qdii" in lowered:
         return "qdii"
-    if any(word in text for word in ("股票", "混合", "债券", "货币", "指数", "FOF", "基金中基金")):
-        return "open"
+    if "货币" in text or "money" in lowered:
+        return "money_market"
+    if "债" in text or "bond" in lowered:
+        return "bond"
+    if "fof" in lowered:
+        return "fof"
+    if "指数" in text or "index" in lowered:
+        return "index"
+    if "混合" in text or "hybrid" in lowered:
+        return "hybrid"
+    if "股票" in text or "equity" in lowered:
+        return "equity"
     return "unknown"
 
 
 def admit_fund(symbol: str) -> FundAdmission:
-    normalized = normalize_symbol(str(symbol).zfill(6), "cn")
+    raw_symbol = str(symbol).strip()
+    normalized = normalize_symbol(raw_symbol, "cn")
     ts_code = to_fund_ts_code(normalized)
     cached = _ADMISSION_CACHE.get(normalized)
     if cached is not None:
         return cached
+
+    if not re.fullmatch(r"\d{6}", normalized or ""):
+        return FundAdmission(
+            symbol=normalized,
+            ts_code=ts_code,
+            is_supported=False,
+            fund_type="unknown",
+            reason="Fund mode requires a six-digit China public fund code.",
+            quality=FundDataQuality(status="blocked", missing_fields=["six_digit_fund_code"]),
+        )
 
     if detect_market(normalized) != "cn":
         return FundAdmission(
@@ -83,9 +105,9 @@ def admit_fund(symbol: str) -> FundAdmission:
         except Exception as exc:
             warnings.append(f"fund_basic unavailable from akshare: {exc}")
 
-    fund_type = _normalize_fund_type(profile)
+    fund_type = classify_fund(profile)
     is_supported = bool(profile)
-    status = "ok" if profile and fund_type != "unknown" else "partial" if is_supported else "unavailable"
+    status = "ok" if profile and fund_type != "unknown" else "partial" if is_supported else "blocked"
     reason = "" if is_supported else "Open fund basic profile is unavailable from configured sources."
 
     admission = FundAdmission(
@@ -100,7 +122,7 @@ def admit_fund(symbol: str) -> FundAdmission:
             primary_source=primary_source,
             fallback_source=fallback_source,
             warnings=warnings,
-            missing_fields=[] if profile else ["basic_profile"],
+            missing_fields=[] if profile else ["fund_basic"],
         ),
     )
     if profile:

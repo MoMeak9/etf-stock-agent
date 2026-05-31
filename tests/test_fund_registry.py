@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from tradingagents.dataflows.fund_registry import admit_fund, clear_fund_admission_cache
+from tradingagents.dataflows.fund_registry import admit_fund, classify_fund, clear_fund_admission_cache
 
 
 class FundRegistryTests(unittest.TestCase):
@@ -64,6 +64,39 @@ class FundRegistryTests(unittest.TestCase):
         self.assertTrue(admission.is_supported)
         self.assertEqual(admission.fund_type, "unknown")
         self.assertEqual(admission.quality.status, "partial")
+
+    def test_rejects_non_six_digit_fund_code(self):
+        admission = admit_fund("123")
+
+        self.assertFalse(admission.is_supported)
+        self.assertEqual(admission.quality.status, "blocked")
+        self.assertIn("six_digit_fund_code", admission.quality.missing_fields)
+
+    def test_classifies_supported_fund_categories(self):
+        cases = [
+            ({"fund_type": "QDII"}, "qdii"),
+            ({"fund_type": "货币型"}, "money_market"),
+            ({"fund_type": "bond"}, "bond"),
+            ({"fund_type": "FOF"}, "fof"),
+            ({"fund_type": "指数型"}, "index"),
+            ({"fund_type": "hybrid"}, "hybrid"),
+            ({"fund_type": "股票型"}, "equity"),
+            ({"fund_type": "其他"}, "unknown"),
+        ]
+
+        for profile, expected in cases:
+            with self.subTest(expected=expected):
+                self.assertEqual(classify_fund(profile), expected)
+
+    def test_blocks_when_tushare_and_akshare_metadata_empty(self):
+        with patch("tradingagents.dataflows.tushare_fund.fetch_fund_basic", return_value=pd.DataFrame()), patch(
+            "tradingagents.dataflows.akshare_fund.fetch_fund_basic", return_value=pd.DataFrame()
+        ):
+            admission = admit_fund("008763")
+
+        self.assertFalse(admission.is_supported)
+        self.assertEqual(admission.quality.status, "blocked")
+        self.assertIn("fund_basic", admission.quality.missing_fields)
 
 
 if __name__ == "__main__":
