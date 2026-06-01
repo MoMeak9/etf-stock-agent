@@ -3,8 +3,10 @@ import unittest
 from unittest.mock import patch
 
 from tradingagents.agents.utils.agent_states import apply_asset_report_mapping
+from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.graph.conditional_logic import ConditionalLogic
 from tradingagents.graph.setup import GraphSetup
+from tradingagents.graph.trading_graph import TradingAgentsGraph
 
 
 def test_fund_tool_formats_package():
@@ -72,3 +74,36 @@ class FundToolsAndGraphTests(unittest.TestCase):
         )
 
         self.assertIsNotNone(graph)
+
+    def test_trading_graph_uses_fund_tool_nodes_and_default_analysts(self):
+        class FakeLLM:
+            def invoke(self, _prompt):
+                return SimpleNamespace(content="fake response")
+
+        class FakeClient:
+            def get_llm(self):
+                return FakeLLM()
+
+        config = {
+            **DEFAULT_CONFIG,
+            "asset_type": "fund",
+            "selected_fund_analysts": ["nav", "product", "portfolio", "event"],
+        }
+
+        with patch(
+            "tradingagents.graph.trading_graph.create_llm_client",
+            return_value=FakeClient(),
+        ), patch(
+            "tradingagents.graph.trading_graph.FinancialSituationMemory",
+            return_value=SimpleNamespace(),
+        ):
+            graph = TradingAgentsGraph(config=config)
+
+        self.assertEqual(
+            graph._selected_analysts,
+            ["nav", "product", "portfolio", "event"],
+        )
+        self.assertEqual(
+            set(graph.tool_nodes),
+            {"nav", "product", "portfolio", "event"},
+        )
