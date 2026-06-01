@@ -46,6 +46,16 @@ from tradingagents.agents.utils.etf_data_tools import (
     get_etf_tracking_info,
     get_etf_news,
 )
+from tradingagents.agents.utils.fund_data_tools import (
+    get_fund_event,
+    get_fund_manager,
+    get_fund_macro_context,
+    get_fund_nav,
+    get_fund_performance,
+    get_fund_portfolio,
+    get_fund_product,
+)
+from tradingagents.dataflows.fund_registry import admit_fund
 
 # Market router for toolkit
 from tradingagents.agents.utils.market_router import get_market_info as _get_market_info
@@ -158,6 +168,10 @@ class TradingAgentsGraph:
             selected_analysts = self.config.get(
                 "selected_etf_analysts", ["market", "flow", "news", "product"]
             )
+        if self._asset_type == "fund" and selected_analysts == ["market", "social", "news", "fundamentals"]:
+            selected_analysts = self.config.get(
+                "selected_fund_analysts", ["nav", "product", "portfolio", "event"]
+            )
         self._selected_analysts = selected_analysts
         self.graph = self.graph_setup.setup_graph(selected_analysts, asset_type=self._asset_type)
 
@@ -214,6 +228,17 @@ class TradingAgentsGraph:
                         get_etf_tracking_info,
                     ]
                 ),
+            }
+        if self._asset_type == "fund":
+            return {
+                "nav": ToolNode(
+                    [get_fund_nav, get_fund_performance, get_fund_macro_context]
+                ),
+                "product": ToolNode([get_fund_product, get_fund_manager]),
+                "portfolio": ToolNode(
+                    [get_fund_portfolio, get_fund_macro_context]
+                ),
+                "event": ToolNode([get_fund_event, get_fund_macro_context]),
             }
         return {
             "market": ToolNode(
@@ -306,6 +331,13 @@ class TradingAgentsGraph:
         market = detect_market(company_name)
         if self._asset_type == "etf" and not is_supported_cn_etf(company_name):
             raise ValueError("ETF mode currently supports only A-share exchange-traded ETF codes.")
+        if self._asset_type == "fund":
+            admission = admit_fund(company_name)
+            if not admission.is_supported:
+                raise ValueError(
+                    admission.reason
+                    or "Fund mode currently supports only open-ended China public fund codes."
+                )
         set_market_context(market)
         set_asset_context(self._asset_type)
 
@@ -339,6 +371,8 @@ class TradingAgentsGraph:
                             "market_report", "sentiment_report", "news_report",
                             "fundamentals_report", "china_market_report",
                             "etf_market_report", "etf_flow_report", "etf_news_report", "etf_product_report",
+                            "fund_nav_report", "fund_product_report",
+                            "fund_portfolio_report", "fund_event_report",
                             "investment_plan", "trader_investment_plan",
                             "final_trade_decision",
                         )
@@ -399,6 +433,10 @@ class TradingAgentsGraph:
             "etf_flow_report": final_state.get("etf_flow_report", ""),
             "etf_news_report": final_state.get("etf_news_report", ""),
             "etf_product_report": final_state.get("etf_product_report", ""),
+            "fund_nav_report": final_state.get("fund_nav_report", ""),
+            "fund_product_report": final_state.get("fund_product_report", ""),
+            "fund_portfolio_report": final_state.get("fund_portfolio_report", ""),
+            "fund_event_report": final_state.get("fund_event_report", ""),
             "investment_debate_state": {
                 "bull_history": final_state["investment_debate_state"]["bull_history"],
                 "bear_history": final_state["investment_debate_state"]["bear_history"],
@@ -477,11 +515,18 @@ class TradingAgentsGraph:
 
         final_decision = str(final_state.get("final_trade_decision", "")).strip()
         asset_type = final_state.get("asset_type", self._asset_type)
-        report_title = "ETF 分析报告" if asset_type == "etf" else "股票分析报告"
-        market_title = "ETF 市场分析报告" if asset_type == "etf" else "市场分析报告"
-        fundamentals_title = "ETF 产品分析报告" if asset_type == "etf" else "基本面分析报告"
-        news_title = "ETF 新闻分析报告" if asset_type == "etf" else "新闻分析报告"
-        sentiment_title = "ETF 资金流与情绪分析报告" if asset_type == "etf" else "社交情绪分析报告"
+        if asset_type == "fund":
+            report_title = "基金分析报告"
+            market_title = "基金净值与收益质量分析报告"
+            fundamentals_title = "基金产品结构分析报告"
+            news_title = "基金公告与事件风险分析报告"
+            sentiment_title = "基金持仓与暴露分析报告"
+        else:
+            report_title = "ETF 分析报告" if asset_type == "etf" else "股票分析报告"
+            market_title = "ETF 市场分析报告" if asset_type == "etf" else "市场分析报告"
+            fundamentals_title = "ETF 产品分析报告" if asset_type == "etf" else "基本面分析报告"
+            news_title = "ETF 新闻分析报告" if asset_type == "etf" else "新闻分析报告"
+            sentiment_title = "ETF 资金流与情绪分析报告" if asset_type == "etf" else "社交情绪分析报告"
 
         # Build report sections
         lines = [

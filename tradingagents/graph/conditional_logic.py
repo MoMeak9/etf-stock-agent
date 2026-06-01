@@ -10,6 +10,9 @@ _MAX_TOOL_CALLS = {
     "fundamentals": 1,
     "flow": 3,
     "product": 2,
+    "nav": 3,
+    "portfolio": 2,
+    "event": 2,
     "china_market": 3,
 }
 
@@ -106,14 +109,52 @@ class ConditionalLogic:
         )
 
     def should_continue_product(self, state: AgentState):
-        """Determine if ETF product analysis should continue."""
+        """Determine if ETF or fund product analysis should continue."""
+        report_field = (
+            "fund_product_report"
+            if state.get("asset_type") == "fund"
+            else "etf_product_report"
+        )
         return self._should_continue_analyst(
             state,
             "product",
-            "etf_product_report",
+            report_field,
             "product_tool_call_count",
             "tools_product",
             "Msg Clear Product",
+        )
+
+    def should_continue_nav(self, state: AgentState):
+        """Determine if fund NAV analysis should continue."""
+        return self._should_continue_analyst(
+            state,
+            "nav",
+            "fund_nav_report",
+            "nav_tool_call_count",
+            "tools_nav",
+            "Msg Clear Nav",
+        )
+
+    def should_continue_portfolio(self, state: AgentState):
+        """Determine if fund portfolio analysis should continue."""
+        return self._should_continue_analyst(
+            state,
+            "portfolio",
+            "fund_portfolio_report",
+            "portfolio_tool_call_count",
+            "tools_portfolio",
+            "Msg Clear Portfolio",
+        )
+
+    def should_continue_event(self, state: AgentState):
+        """Determine if fund event analysis should continue."""
+        return self._should_continue_analyst(
+            state,
+            "event",
+            "fund_event_report",
+            "event_tool_call_count",
+            "tools_event",
+            "Msg Clear Event",
         )
 
     def should_continue_debate(self, state: AgentState) -> str:

@@ -53,6 +53,13 @@ class GraphSetup:
                 "news": create_etf_news_analyst,
                 "product": create_etf_product_analyst,
             }
+        elif asset_type == "fund":
+            factory_map = {
+                "nav": create_fund_nav_analyst,
+                "product": create_fund_product_analyst,
+                "portfolio": create_fund_portfolio_analyst,
+                "event": create_fund_event_analyst,
+            }
         else:
             factory_map = {
                 "market": create_market_analyst,

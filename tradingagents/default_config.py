@@ -26,6 +26,7 @@ DEFAULT_CONFIG = {
     "asset_type": "stock",
     "etf_analysis_mode": "hybrid",
     "selected_etf_analysts": ["market", "flow", "news", "product"],
+    "selected_fund_analysts": ["nav", "product", "portfolio", "event"],
     # Data vendor configuration
     # Category-level configuration (default for all tools in category)
     "data_vendors": {

@@ -31,6 +31,14 @@ class Propagator:
                 f"同时给出交易建议与配置建议。"
                 f"分析日期：{trade_date}。"
             )
+        elif self.asset_type == "fund":
+            analysis_request = (
+                f"请对开放式公募基金 {company_name} 进行全面分析，"
+                f"覆盖净值表现、收益质量、产品结构、组合暴露、基金经理、公告事件、"
+                f"申购赎回限制以及中长期宏观环境，"
+                f"最终给出申购/分批申购/持有/赎回/观望建议。"
+                f"分析日期：{trade_date}。"
+            )
         else:
             analysis_request = (
                 f"请对股票 {company_name} 进行全面分析，"
@@ -78,6 +86,10 @@ class Propagator:
             "etf_product_report": "",
             "etf_news_report": "",
             "etf_flow_report": "",
+            "fund_nav_report": "",
+            "fund_product_report": "",
+            "fund_portfolio_report": "",
+            "fund_event_report": "",
             "market_tool_call_count": 0,
             "sentiment_tool_call_count": 0,
             "news_tool_call_count": 0,
@@ -85,6 +97,9 @@ class Propagator:
             "china_market_tool_call_count": 0,
             "flow_tool_call_count": 0,
             "product_tool_call_count": 0,
+            "nav_tool_call_count": 0,
+            "portfolio_tool_call_count": 0,
+            "event_tool_call_count": 0,
         }
 
     def get_graph_args(self, callbacks: Optional[List] = None) -> Dict[str, Any]:
