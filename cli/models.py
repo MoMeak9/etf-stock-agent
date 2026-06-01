@@ -6,6 +6,8 @@ from pydantic import BaseModel
 class AssetType(str, Enum):
     STOCK = "stock"
     ETF = "etf"
+    FUND = "fund"
+    AUTO = "auto"
 
 
 class AnalystType(str, Enum):

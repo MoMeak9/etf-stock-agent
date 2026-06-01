@@ -17,7 +17,7 @@ class AnalysisRequest:
     tickers: List[str]
     level: int = 2
     date: Optional[str] = None
-    asset_type: str = "stock"
+    asset_type: str = "auto"
     provider: str = "deepseek"
     deep_model: str = "deepseek-v4-flash"
     quick_model: str = "deepseek-v4-flash"
@@ -54,7 +54,7 @@ def _request_to_args(request: AnalysisRequest) -> argparse.Namespace:
         backend_url=request.backend_url or os.getenv("CUSTOM_LLM_API_URL", ""),
         cn_vendor=request.cn_vendor or "tushare",
         debug=bool(request.debug),
-        asset_type=request.asset_type or "stock",
+        asset_type=request.asset_type or "auto",
         date_was_explicit=request.date is not None,
     )
 
@@ -64,8 +64,8 @@ def prepare_analysis(request: AnalysisRequest) -> PreparedAnalysis:
         raise ValueError("tickers must contain at least one symbol")
     if request.level not in {1, 2, 3, 4, 5}:
         raise ValueError("level must be between 1 and 5")
-    if request.asset_type not in {"stock", "etf", "auto"}:
-        raise ValueError("asset_type must be one of: stock, etf, auto")
+    if request.asset_type not in {"stock", "etf", "fund", "auto"}:
+        raise ValueError("asset_type must be one of: stock, etf, fund, auto")
     if request.cn_vendor not in {"tushare", "akshare", "baostock"}:
         raise ValueError("cn_vendor must be one of: tushare, akshare, baostock")
 

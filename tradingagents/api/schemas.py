@@ -10,7 +10,7 @@ class AnalysisJobCreate(BaseModel):
     tickers: List[str] = Field(min_length=1)
     level: int = Field(default=2, ge=1, le=5)
     date: Optional[str] = None
-    asset_type: Literal["stock", "etf", "auto"] = "stock"
+    asset_type: Literal["stock", "etf", "fund", "auto"] = "auto"
     provider: str = "deepseek"
     deep_model: str = "deepseek-v4-flash"
     quick_model: str = "deepseek-v4-flash"

@@ -21,6 +21,13 @@ ETF_ANALYST_ORDER = [
     ("ETF Product Analyst", "product"),
 ]
 
+FUND_ANALYST_ORDER = [
+    ("Fund NAV Analyst", "nav"),
+    ("Fund Product Analyst", "product"),
+    ("Fund Portfolio Analyst", "portfolio"),
+    ("Fund Event Analyst", "event"),
+]
+
 
 def get_ticker() -> str:
     """Prompt the user to enter a ticker symbol."""
@@ -77,7 +84,12 @@ def get_analysis_date() -> str:
 
 def select_analysts(asset_type: str = AssetType.STOCK.value) -> List[str]:
     """Select analysts using an interactive checkbox."""
-    analyst_order = ETF_ANALYST_ORDER if asset_type == AssetType.ETF.value else STOCK_ANALYST_ORDER
+    if asset_type == AssetType.ETF.value:
+        analyst_order = ETF_ANALYST_ORDER
+    elif asset_type == AssetType.FUND.value:
+        analyst_order = FUND_ANALYST_ORDER
+    else:
+        analyst_order = STOCK_ANALYST_ORDER
     choices = questionary.checkbox(
         "Select Your [Analysts Team]:",
         choices=[

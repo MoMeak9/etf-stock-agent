@@ -9,8 +9,13 @@ class AnalysisApiModelTests(unittest.TestCase):
         payload = AnalysisJobCreate(tickers=["600519"])
 
         self.assertEqual(payload.level, 2)
-        self.assertEqual(payload.asset_type, "stock")
+        self.assertEqual(payload.asset_type, "auto")
         self.assertEqual(payload.workers, 1)
+
+    def test_request_accepts_fund_asset_type(self):
+        payload = AnalysisJobCreate(tickers=["008763"], asset_type="fund")
+
+        self.assertEqual(payload.asset_type, "fund")
 
     def test_job_store_lifecycle(self):
         store = JobStore()

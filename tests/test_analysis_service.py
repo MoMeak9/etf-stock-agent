@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import patch
 
+from tradingagents.dataflows.fund_models import FundAdmission
 from tradingagents.services.analysis_service import (
     AnalysisRequest,
     prepare_analysis,
@@ -38,6 +39,23 @@ class AnalysisServiceTests(unittest.TestCase):
             prepared.config["selected_etf_analysts"],
             ["market", "flow", "news", "product"],
         )
+
+    def test_prepare_fund_selects_fund_profiles(self):
+        admission = FundAdmission(
+            symbol="008763",
+            ts_code="008763.OF",
+            is_supported=True,
+            fund_type="qdii",
+        )
+
+        with patch("tradingagents.dataflows.fund_registry.admit_fund", return_value=admission):
+            prepared = prepare_analysis(
+                AnalysisRequest(tickers=["008763"], asset_type="fund", level=3)
+            )
+
+        self.assertEqual(prepared.asset_type, "fund")
+        self.assertEqual(prepared.analysts, ["nav", "product", "portfolio", "event"])
+        self.assertEqual(prepared.config["asset_type"], "fund")
 
     def test_run_analysis_batch_uses_analyze_single_for_each_ticker(self):
         fake_result = {

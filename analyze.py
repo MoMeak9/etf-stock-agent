@@ -3,7 +3,7 @@
 TradingAgents 多股票并行分析工具
 
 功能:
-  - 支持多只股票或A股ETF并行分析
+  - 支持多只股票、A股ETF或开放式基金并行分析
   - 5档分析强度 (1-闪电 ~ 5-极致)
   - 完整 CLI 参数支持
   - 自动市场检测 (A股/港股/美股)
@@ -16,7 +16,10 @@ TradingAgents 多股票并行分析工具
   # 分析单只A股ETF
   python analyze.py 159949 --asset-type etf
 
-  # 自动识别股票/ETF（同一批次不能混合）
+  # 分析单只开放式基金
+  python analyze.py 008763 -l 3
+
+  # 自动识别股票/ETF/基金（同一批次不能混合）
   python analyze.py 159949 --asset-type auto
 
   # 并行分析多只股票，强度3
@@ -161,32 +164,104 @@ ETF_INTENSITY_PROFILES = {
     },
 }
 
+FUND_INTENSITY_PROFILES = {
+    1: {
+        "name": "基金闪电",
+        "desc": "极速扫描，净值表现与回撤概览，单轮辩论",
+        "analysts": ["nav"],
+        "max_debate_rounds": 1,
+        "max_risk_discuss_rounds": 1,
+        "max_recur_limit": 50,
+    },
+    2: {
+        "name": "基金快速",
+        "desc": "快速分析，净值走势+产品画像，单轮辩论",
+        "analysts": ["nav", "product"],
+        "max_debate_rounds": 1,
+        "max_risk_discuss_rounds": 1,
+        "max_recur_limit": 80,
+    },
+    3: {
+        "name": "基金标准",
+        "desc": "均衡分析，净值+产品+持仓+事件，双轮辩论",
+        "analysts": ["nav", "product", "portfolio", "event"],
+        "max_debate_rounds": 2,
+        "max_risk_discuss_rounds": 2,
+        "max_recur_limit": 100,
+    },
+    4: {
+        "name": "基金深度",
+        "desc": "深度分析，完整基金研究团队，三轮辩论",
+        "analysts": ["nav", "product", "portfolio", "event"],
+        "max_debate_rounds": 3,
+        "max_risk_discuss_rounds": 3,
+        "max_recur_limit": 150,
+    },
+    5: {
+        "name": "基金极致",
+        "desc": "最高精度，完整基金研究团队，五轮辩论",
+        "analysts": ["nav", "product", "portfolio", "event"],
+        "max_debate_rounds": 5,
+        "max_risk_discuss_rounds": 5,
+        "max_recur_limit": 200,
+    },
+}
+
 INTENSITY_PROFILES = STOCK_INTENSITY_PROFILES
 
 
-def resolve_asset_type(tickers: List[str], requested: str = "stock") -> str:
-    """Resolve CLI asset type, optionally detecting A-share ETFs."""
-    normalized = (requested or "stock").lower()
-    if normalized in {"stock", "etf"}:
+def resolve_asset_type(tickers: List[str], requested: str = "auto") -> str:
+    """Resolve CLI asset type, optionally detecting ETFs and open funds."""
+    normalized = (requested or "auto").lower()
+    if normalized in {"stock", "etf", "fund"}:
         return normalized
     if normalized != "auto":
         raise ValueError(f"Unsupported asset type: {requested}")
 
     from tradingagents.dataflows.market_utils import detect_market, is_etf
+    from tradingagents.dataflows import fund_registry
 
-    detected = []
+    detected: List[str] = []
     for ticker in tickers:
-        asset_type = "etf" if detect_market(ticker) == "cn" and is_etf(ticker) else "stock"
-        detected.append(asset_type)
+        candidates: List[str] = []
+        market = detect_market(ticker)
+        if market == "cn" and is_etf(ticker):
+            candidates.append("etf")
+
+        admission = fund_registry.admit_fund(ticker)
+        if getattr(admission, "is_supported", False):
+            candidates.append("fund")
+
+        if not candidates and market in {"cn", "us", "hk"}:
+            candidates.append("stock")
+
+        unique_candidates = set(candidates)
+        if len(unique_candidates) > 1:
+            raise ValueError(
+                f"auto asset type detected multiple candidates for {ticker}: "
+                f"{', '.join(candidates)}; specify --asset-type"
+            )
+        if not candidates:
+            raise ValueError(f"auto asset type could not detect a supported type for {ticker}")
+        detected.append(candidates[0])
+
     unique = set(detected)
     if len(unique) > 1:
-        raise ValueError("auto asset type detected mixed stock and ETF tickers; run separate batches")
+        raise ValueError(
+            "auto asset type detected mixed stock, ETF, and fund tickers; run separate batches"
+        )
     return detected[0] if detected else "stock"
 
 
 def resolve_intensity(args: argparse.Namespace) -> dict:
     """Return the intensity profile for the resolved asset type."""
-    profiles = ETF_INTENSITY_PROFILES if getattr(args, "asset_type", "stock") == "etf" else STOCK_INTENSITY_PROFILES
+    asset_type = getattr(args, "asset_type", "stock")
+    if asset_type == "etf":
+        profiles = ETF_INTENSITY_PROFILES
+    elif asset_type == "fund":
+        profiles = FUND_INTENSITY_PROFILES
+    else:
+        profiles = STOCK_INTENSITY_PROFILES
     return profiles[args.level]
 
 
@@ -199,6 +274,8 @@ def build_config(args: argparse.Namespace, intensity: dict) -> Dict[str, Any]:
     config["asset_type"] = asset_type
     if asset_type == "etf":
         config["selected_etf_analysts"] = intensity["analysts"]
+    elif asset_type == "fund":
+        config["selected_fund_analysts"] = intensity["analysts"]
 
     # LLM 设置
     config["llm_provider"] = args.provider
@@ -658,7 +735,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     argv_list = list(argv) if argv is not None else sys.argv[1:]
     parser = argparse.ArgumentParser(
         prog="analyze",
-        description="TradingAgents 股票/ETF并行分析工具",
+        description="TradingAgents 股票/ETF/基金并行分析工具",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
 分析强度档位:
@@ -672,13 +749,18 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     1  ETF闪电  行情技术分析
     2  ETF快速  行情+产品结构
     3+ ETF标准  行情+资金流+新闻+产品
+  基金模式:
+    1  基金闪电  净值表现与回撤概览
+    2  基金快速  净值走势+产品画像
+    3+ 基金标准  净值+产品+持仓+事件
 
 示例:
   %(prog)s 000001                                  # A股股票，默认强度2
   %(prog)s 000001 600519 -l 4                      # 两只A股股票，深度分析
   %(prog)s AAPL MSFT GOOGL -l 3 -w 3               # 三只美股并行
   %(prog)s 159949 --asset-type etf -l 3            # A股ETF完整分析
-  %(prog)s 159949 --asset-type auto                # 自动识别ETF
+  %(prog)s 008763 -l 3                             # 开放式基金标准分析
+  %(prog)s 159949 --asset-type auto                # 自动识别ETF/基金/股票
   %(prog)s 000001 -l 5 -d 2025-03-17               # 极致分析，指定日期
 """,
     )
@@ -686,13 +768,13 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "tickers",
         nargs="+",
-        help="股票或ETF代码列表（空格分隔）；ETF模式仅支持A股场内ETF",
+        help="股票、ETF或开放式基金代码列表（空格分隔）；ETF模式仅支持A股场内ETF",
     )
     parser.add_argument(
         "--asset-type",
-        choices=["stock", "etf", "auto"],
-        default="stock",
-        help="资产类型：stock股票、etf A股ETF、auto自动识别（默认: stock）",
+        choices=["stock", "etf", "fund", "auto"],
+        default="auto",
+        help="资产类型：stock股票、etf A股ETF、fund开放式基金、auto自动识别（默认: auto）",
     )
     parser.add_argument(
         "-l", "--level",
