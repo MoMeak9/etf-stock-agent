@@ -68,6 +68,10 @@ class AgentState(MessagesState):
     etf_product_report: Annotated[str, "Report from the ETF Product Analyst"]
     etf_news_report: Annotated[str, "Report from the ETF News Analyst"]
     etf_flow_report: Annotated[str, "Report from the ETF Flow Analyst"]
+    fund_nav_report: Annotated[str, "Report from the Fund NAV Analyst"]
+    fund_product_report: Annotated[str, "Report from the Fund Product Analyst"]
+    fund_portfolio_report: Annotated[str, "Report from the Fund Portfolio Analyst"]
+    fund_event_report: Annotated[str, "Report from the Fund Event Analyst"]
 
     # Tool call counters (death-loop prevention)
     market_tool_call_count: Annotated[int, "Number of tool calls by Market Analyst"]
@@ -77,6 +81,9 @@ class AgentState(MessagesState):
     china_market_tool_call_count: Annotated[int, "Number of tool calls by China Market Analyst"]
     flow_tool_call_count: Annotated[int, "Number of tool calls by ETF Flow Analyst"]
     product_tool_call_count: Annotated[int, "Number of tool calls by ETF Product Analyst"]
+    nav_tool_call_count: Annotated[int, "Number of tool calls by Fund NAV Analyst"]
+    portfolio_tool_call_count: Annotated[int, "Number of tool calls by Fund Portfolio Analyst"]
+    event_tool_call_count: Annotated[int, "Number of tool calls by Fund Event Analyst"]
 
     # researcher team discussion step
     investment_debate_state: Annotated[
@@ -100,15 +107,27 @@ ETF_GENERIC_REPORT_MAP = {
     "etf_flow_report": "sentiment_report",
 }
 
+FUND_GENERIC_REPORT_MAP = {
+    "fund_nav_report": "market_report",
+    "fund_product_report": "fundamentals_report",
+    "fund_portfolio_report": "sentiment_report",
+    "fund_event_report": "news_report",
+}
+
 
 def apply_asset_report_mapping(update: dict, asset_type: str) -> dict:
-    """Populate generic downstream report slots from asset-specific ETF fields."""
+    """Populate generic downstream report slots from asset-specific fields."""
     mapped = dict(update)
-    if asset_type != "etf":
+    report_map = None
+    if asset_type == "etf":
+        report_map = ETF_GENERIC_REPORT_MAP
+    elif asset_type == "fund":
+        report_map = FUND_GENERIC_REPORT_MAP
+    if report_map is None:
         return mapped
 
-    for etf_field, generic_field in ETF_GENERIC_REPORT_MAP.items():
-        content = mapped.get(etf_field)
+    for asset_field, generic_field in report_map.items():
+        content = mapped.get(asset_field)
         if content is not None and generic_field not in mapped:
             mapped[generic_field] = content
 

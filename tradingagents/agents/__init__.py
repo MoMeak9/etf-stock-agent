@@ -11,6 +11,10 @@ from .analysts.etf_market_analyst import create_etf_market_analyst
 from .analysts.etf_product_analyst import create_etf_product_analyst
 from .analysts.etf_news_analyst import create_etf_news_analyst
 from .analysts.etf_flow_analyst import create_etf_flow_analyst
+from .analysts.fund_nav_analyst import create_fund_nav_analyst
+from .analysts.fund_product_analyst import create_fund_product_analyst
+from .analysts.fund_portfolio_analyst import create_fund_portfolio_analyst
+from .analysts.fund_event_analyst import create_fund_event_analyst
 
 from .researchers.bear_researcher import create_bear_researcher
 from .researchers.bull_researcher import create_bull_researcher
@@ -46,5 +50,9 @@ __all__ = [
     "create_etf_product_analyst",
     "create_etf_news_analyst",
     "create_etf_flow_analyst",
+    "create_fund_nav_analyst",
+    "create_fund_product_analyst",
+    "create_fund_portfolio_analyst",
+    "create_fund_event_analyst",
     "create_trader",
 ]
