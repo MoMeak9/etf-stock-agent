@@ -33,13 +33,14 @@ class SignalProcessor:
         """Initialize with an LLM for processing."""
         self.quick_thinking_llm = quick_thinking_llm
 
-    def process_signal(self, full_signal: str, stock_symbol: str = None) -> dict:
+    def process_signal(self, full_signal: str, stock_symbol: str = None, asset_type: str = "stock") -> dict:
         """
         Process a full trading signal to extract structured decision information.
 
         Args:
             full_signal: Complete trading signal text
             stock_symbol: Stock symbol to determine currency type
+            asset_type: Asset class for parsing domain-specific actions
 
         Returns:
             Dictionary containing extracted decision information
@@ -67,6 +68,9 @@ class SignalProcessor:
                 'risk_score': 0.5,
                 'reasoning': '信号内容为空，默认持有建议'
             }
+
+        if asset_type == "fund":
+            return self._process_fund_signal(full_signal)
 
         # 检测股票类型和货币
         market_info = get_market_info(stock_symbol)
@@ -188,6 +192,75 @@ class SignalProcessor:
             logger.error(f"信号处理错误: {e}", exc_info=True)
             # 回退到简单提取
             return self._extract_simple_decision(full_signal)
+
+    def _process_fund_signal(self, full_signal: str) -> dict:
+        """Extract open-ended public fund actions without requiring target prices."""
+        action = self._extract_fund_action(full_signal)
+        return {
+            'action': action,
+            'confidence': self._extract_fund_level(full_signal, '置信度', 0.7),
+            'risk_score': self._extract_fund_level(full_signal, '风险评分', 0.5),
+            'reasoning': self._extract_fund_reasoning(full_signal),
+        }
+
+    def _extract_fund_action(self, text: str) -> str:
+        """Extract one allowed fund action, preferring explicit final decision sections."""
+        allowed_actions = '申购|分批申购|持有|赎回|观望'
+        for section in self._fund_candidate_sections(text):
+            for pattern in [
+                rf'(?:最终基金建议|基金建议|最终建议|明确建议|最终决策|基金决策)[^\n：:]{{0,20}}[：:]\s*(?:\*\*)?({allowed_actions})(?:\*\*)?',
+                rf'(?:建议|行动方案)[^\n。；;]{{0,30}}({allowed_actions})',
+                rf'({allowed_actions})',
+            ]:
+                matches = re.findall(pattern, section)
+                if matches:
+                    return matches[-1]
+        return '观望'
+
+    def _fund_candidate_sections(self, text: str) -> list[str]:
+        sections = []
+        anchor_positions = []
+        for marker in [
+            '最终基金建议',
+            '基金建议',
+            '最终基金决策',
+            '最终决策',
+            '明确建议',
+            '\n### 结论',
+            '\n## 结论',
+        ]:
+            idx = text.rfind(marker)
+            if idx != -1:
+                anchor_positions.append(idx)
+
+        if anchor_positions:
+            sections.append(text[max(anchor_positions):])
+
+        tail = text[-1500:] if len(text) > 1500 else text
+        if tail not in sections:
+            sections.append(tail)
+        if text not in sections:
+            sections.append(text)
+        return sections
+
+    def _extract_fund_level(self, text: str, label: str, default: float):
+        match = re.search(rf'{label}[：:]\s*([高中低]|\d+(?:\.\d+)?)', text)
+        if not match:
+            return default
+        value = match.group(1)
+        level_map = {'高': 0.8, '中': 0.5, '低': 0.3}
+        if value in level_map:
+            return level_map[value]
+        try:
+            return float(value)
+        except ValueError:
+            return default
+
+    def _extract_fund_reasoning(self, text: str) -> str:
+        match = re.search(r'(?:理由|决策理由)[：:]\s*(.+)', text, re.DOTALL)
+        if match:
+            return match.group(1).strip()
+        return '基于基金净值、产品结构、持仓暴露与风险因素的综合建议'
 
     def _smart_price_estimation(self, text: str, action: str, is_china: bool) -> float:
         """智能价格推算方法"""

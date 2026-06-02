@@ -108,6 +108,36 @@ def _decision_rows_for_asset(asset_type: str, decision: dict) -> list[str]:
     ]
 
 
+def _report_section_labels_for_asset(asset_type: str) -> dict:
+    if asset_type == "fund":
+        return {
+            "investment_debate_title": "基金观点辩论",
+            "bull_researcher_title": "积极基金研究员",
+            "bear_researcher_title": "谨慎基金研究员",
+            "judge_decision_title": "基金研究经理决策",
+            "trader_plan_title": "基金操作计划",
+            "risk_debate_title": "基金风险辩论",
+            "aggressive_risk_title": "激进基金风控分析师",
+            "conservative_risk_title": "保守基金风控分析师",
+            "neutral_risk_title": "中性基金风控分析师",
+            "risk_judge_title": "基金风险经理最终决策",
+            "final_decision_title": "最终基金决策",
+        }
+    return {
+        "investment_debate_title": "投资辩论",
+        "bull_researcher_title": "看涨研究员",
+        "bear_researcher_title": "看跌研究员",
+        "judge_decision_title": "研究经理决策",
+        "trader_plan_title": "交易员投资计划",
+        "risk_debate_title": "风险辩论",
+        "aggressive_risk_title": "激进风控分析师",
+        "conservative_risk_title": "保守风控分析师",
+        "neutral_risk_title": "中性风控分析师",
+        "risk_judge_title": "风险经理最终决策",
+        "final_decision_title": "最终交易决策",
+    }
+
+
 class TradingAgentsGraph:
     """Main class that orchestrates the trading agents framework."""
 
@@ -450,7 +480,10 @@ class TradingAgentsGraph:
         self._log_state(trade_date, final_state)
 
         # Process signal
-        decision = self.process_signal(final_state["final_trade_decision"])
+        decision = self.process_signal(
+            final_state["final_trade_decision"],
+            asset_type=final_state.get("asset_type", self._asset_type),
+        )
 
         # Generate markdown report
         self._generate_report(trade_date, final_state, decision)
@@ -531,12 +564,16 @@ class TradingAgentsGraph:
             self.curr_state, returns_losses, memories["risk_manager"]
         )
 
-    def process_signal(self, full_signal):
+    def process_signal(self, full_signal, asset_type=None):
         """Process a signal to extract the core decision.
 
         Returns a dict: {action, target_price, confidence, risk_score, reasoning}
         """
-        return self.signal_processor.process_signal(full_signal, self.ticker)
+        return self.signal_processor.process_signal(
+            full_signal,
+            self.ticker,
+            asset_type=asset_type or self._asset_type,
+        )
 
     def _generate_report(self, trade_date, final_state, decision):
         """Generate a markdown analysis report in docs/reports/.
@@ -557,6 +594,7 @@ class TradingAgentsGraph:
         final_decision = str(final_state.get("final_trade_decision", "")).strip()
         asset_type = final_state.get("asset_type", self._asset_type)
         titles = _report_titles_for_asset(asset_type)
+        section_labels = _report_section_labels_for_asset(asset_type)
 
         # Build report sections
         lines = [
@@ -600,23 +638,23 @@ class TradingAgentsGraph:
         # Phase 2: Investment Debate
         debate = final_state.get("investment_debate_state", {})
         if debate:
-            lines.append("## 投资辩论")
+            lines.append(f"## {section_labels['investment_debate_title']}")
             lines.append("")
             bull = debate.get("bull_history", "")
             if bull:
-                lines.append("### 看涨研究员")
+                lines.append(f"### {section_labels['bull_researcher_title']}")
                 lines.append("")
                 lines.append(bull.strip())
                 lines.append("")
             bear = debate.get("bear_history", "")
             if bear:
-                lines.append("### 看跌研究员")
+                lines.append(f"### {section_labels['bear_researcher_title']}")
                 lines.append("")
                 lines.append(bear.strip())
                 lines.append("")
             judge = debate.get("judge_decision", "")
             if judge:
-                lines.append("### 研究经理决策")
+                lines.append(f"### {section_labels['judge_decision_title']}")
                 lines.append("")
                 lines.append(judge.strip())
                 lines.append("")
@@ -626,7 +664,7 @@ class TradingAgentsGraph:
         # Phase 2.5: Trader Plan
         trader_plan = final_state.get("trader_investment_plan", "")
         if trader_plan:
-            lines.append("## 交易员投资计划")
+            lines.append(f"## {section_labels['trader_plan_title']}")
             lines.append("")
             lines.append(trader_plan.strip())
             lines.append("")
@@ -636,12 +674,12 @@ class TradingAgentsGraph:
         # Phase 3: Risk Debate
         risk = final_state.get("risk_debate_state", {})
         if risk:
-            lines.append("## 风险辩论")
+            lines.append(f"## {section_labels['risk_debate_title']}")
             lines.append("")
             for role, key in [
-                ("激进风控分析师", "aggressive_history"),
-                ("保守风控分析师", "conservative_history"),
-                ("中性风控分析师", "neutral_history"),
+                (section_labels["aggressive_risk_title"], "aggressive_history"),
+                (section_labels["conservative_risk_title"], "conservative_history"),
+                (section_labels["neutral_risk_title"], "neutral_history"),
             ]:
                 content = risk.get(key, "")
                 if content:
@@ -651,7 +689,7 @@ class TradingAgentsGraph:
                     lines.append("")
             risk_judge = risk.get("judge_decision", "")
             if risk_judge and risk_judge.strip() != final_decision:
-                lines.append("### 风险经理最终决策")
+                lines.append(f"### {section_labels['risk_judge_title']}")
                 lines.append("")
                 lines.append(risk_judge.strip())
                 lines.append("")
@@ -660,7 +698,7 @@ class TradingAgentsGraph:
 
         # Final Decision
         if final_decision:
-            lines.append("## 最终交易决策")
+            lines.append(f"## {section_labels['final_decision_title']}")
             lines.append("")
             lines.append(final_decision.strip())
             lines.append("")
