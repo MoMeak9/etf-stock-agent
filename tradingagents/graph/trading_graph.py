@@ -67,6 +67,47 @@ from .reflection import Reflector
 from .signal_processing import SignalProcessor
 
 
+def _report_titles_for_asset(asset_type: str) -> dict:
+    if asset_type == "fund":
+        return {
+            "report_title": "基金分析报告",
+            "market_title": "基金净值与收益质量分析报告",
+            "fundamentals_title": "基金产品结构分析报告",
+            "news_title": "基金公告与事件风险分析报告",
+            "sentiment_title": "基金持仓与暴露分析报告",
+        }
+    if asset_type == "etf":
+        return {
+            "report_title": "ETF 分析报告",
+            "market_title": "ETF 市场分析报告",
+            "fundamentals_title": "ETF 产品分析报告",
+            "news_title": "ETF 新闻分析报告",
+            "sentiment_title": "ETF 资金流与情绪分析报告",
+        }
+    return {
+        "report_title": "股票分析报告",
+        "market_title": "市场分析报告",
+        "fundamentals_title": "基本面分析报告",
+        "news_title": "新闻分析报告",
+        "sentiment_title": "社交情绪分析报告",
+    }
+
+
+def _decision_rows_for_asset(asset_type: str, decision: dict) -> list[str]:
+    if asset_type == "fund":
+        return [
+            f"| 基金建议 | {decision.get('action', 'N/A')} |",
+            f"| 置信度 | {decision.get('confidence', 'N/A')} |",
+            f"| 风险评分 | {decision.get('risk_score', 'N/A')} |",
+        ]
+    return [
+        f"| 操作建议 | {decision.get('action', 'N/A')} |",
+        f"| 目标价 | {decision.get('target_price', 'N/A')} |",
+        f"| 置信度 | {decision.get('confidence', 'N/A')} |",
+        f"| 风险评分 | {decision.get('risk_score', 'N/A')} |",
+    ]
+
+
 class TradingAgentsGraph:
     """Main class that orchestrates the trading agents framework."""
 
@@ -515,22 +556,11 @@ class TradingAgentsGraph:
 
         final_decision = str(final_state.get("final_trade_decision", "")).strip()
         asset_type = final_state.get("asset_type", self._asset_type)
-        if asset_type == "fund":
-            report_title = "基金分析报告"
-            market_title = "基金净值与收益质量分析报告"
-            fundamentals_title = "基金产品结构分析报告"
-            news_title = "基金公告与事件风险分析报告"
-            sentiment_title = "基金持仓与暴露分析报告"
-        else:
-            report_title = "ETF 分析报告" if asset_type == "etf" else "股票分析报告"
-            market_title = "ETF 市场分析报告" if asset_type == "etf" else "市场分析报告"
-            fundamentals_title = "ETF 产品分析报告" if asset_type == "etf" else "基本面分析报告"
-            news_title = "ETF 新闻分析报告" if asset_type == "etf" else "新闻分析报告"
-            sentiment_title = "ETF 资金流与情绪分析报告" if asset_type == "etf" else "社交情绪分析报告"
+        titles = _report_titles_for_asset(asset_type)
 
         # Build report sections
         lines = [
-            f"# {report_title} — {ticker}",
+            f"# {titles['report_title']} — {ticker}",
             f"",
             f"- **分析日期**: {trade_date}",
             f"- **生成时间**: {_dt.now().strftime('%Y-%m-%d %H:%M:%S')}",
@@ -541,10 +571,7 @@ class TradingAgentsGraph:
             f"",
             f"| 项目 | 结果 |",
             f"|------|------|",
-            f"| 操作建议 | {decision.get('action', 'N/A')} |",
-            f"| 目标价 | {decision.get('target_price', 'N/A')} |",
-            f"| 置信度 | {decision.get('confidence', 'N/A')} |",
-            f"| 风险评分 | {decision.get('risk_score', 'N/A')} |",
+            *_decision_rows_for_asset(asset_type, decision),
             f"",
             f"**决策理由**: {decision.get('reasoning', 'N/A')}",
             f"",
@@ -554,10 +581,10 @@ class TradingAgentsGraph:
 
         # Phase 1: Analyst Reports
         report_sections = [
-            (market_title, "market_report"),
-            (fundamentals_title, "fundamentals_report"),
-            (news_title, "news_report"),
-            (sentiment_title, "sentiment_report"),
+            (titles["market_title"], "market_report"),
+            (titles["fundamentals_title"], "fundamentals_report"),
+            (titles["news_title"], "news_report"),
+            (titles["sentiment_title"], "sentiment_report"),
             ("中国市场分析报告", "china_market_report"),
         ]
         for title, key in report_sections:
