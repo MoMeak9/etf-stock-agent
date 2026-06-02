@@ -59,6 +59,15 @@ class AnalyzeAssetTypeTests(unittest.TestCase):
         self.assertEqual(config["asset_type"], "stock")
         self.assertEqual(intensity["analysts"], ["market", "fundamentals"])
 
+    def test_default_auto_stock_does_not_probe_fund_registry(self):
+        with patch(
+            "tradingagents.dataflows.fund_registry.admit_fund",
+            side_effect=AssertionError("fund registry should not be probed for obvious stocks"),
+        ):
+            args = analyze.parse_args(["600519"])
+
+        self.assertEqual(args.asset_type, "stock")
+
 
 if __name__ == "__main__":
     unittest.main()

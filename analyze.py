@@ -209,6 +209,39 @@ FUND_INTENSITY_PROFILES = {
 
 INTENSITY_PROFILES = STOCK_INTENSITY_PROFILES
 
+_FUND_PROBE_PREFIXES = ("00", "01", "02", "04", "05", "07", "08", "09")
+_COMMON_CN_STOCK_PREFIXES = (
+    "000",
+    "001",
+    "002",
+    "003",
+    "300",
+    "301",
+    "600",
+    "601",
+    "603",
+    "605",
+    "688",
+    "689",
+)
+
+
+def _should_probe_fund_registry(ticker: str) -> bool:
+    """Return whether auto mode should spend a fund registry probe on ticker."""
+    from tradingagents.dataflows.market_utils import detect_market, is_etf, normalize_symbol
+
+    if detect_market(ticker) != "cn":
+        return False
+
+    normalized = normalize_symbol(ticker, "cn")
+    if not normalized or len(normalized) != 6 or not normalized.isdigit():
+        return False
+    if is_etf(normalized):
+        return False
+    if normalized.startswith(_COMMON_CN_STOCK_PREFIXES):
+        return False
+    return normalized.startswith(_FUND_PROBE_PREFIXES)
+
 
 def resolve_asset_type(tickers: List[str], requested: str = "auto") -> str:
     """Resolve CLI asset type, optionally detecting ETFs and open funds."""
@@ -228,9 +261,10 @@ def resolve_asset_type(tickers: List[str], requested: str = "auto") -> str:
         if market == "cn" and is_etf(ticker):
             candidates.append("etf")
 
-        admission = fund_registry.admit_fund(ticker)
-        if getattr(admission, "is_supported", False):
-            candidates.append("fund")
+        if _should_probe_fund_registry(ticker):
+            admission = fund_registry.admit_fund(ticker)
+            if getattr(admission, "is_supported", False):
+                candidates.append("fund")
 
         if not candidates and market in {"cn", "us", "hk"}:
             candidates.append("stock")

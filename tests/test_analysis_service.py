@@ -22,6 +22,17 @@ class AnalysisServiceTests(unittest.TestCase):
         self.assertEqual(prepared.original_date, "2026-05-22")
         self.assertEqual(prepared.trade_date, "2026-05-22")
 
+    def test_prepare_stock_default_does_not_probe_fund_registry(self):
+        with patch(
+            "tradingagents.dataflows.fund_registry.admit_fund",
+            side_effect=AssertionError("fund registry should not be probed for obvious stocks"),
+        ):
+            prepared = prepare_analysis(
+                AnalysisRequest(tickers=["600519"], date="2026-05-22")
+            )
+
+        self.assertEqual(prepared.asset_type, "stock")
+
     def test_prepare_etf_selects_etf_profiles(self):
         prepared = prepare_analysis(
             AnalysisRequest(
