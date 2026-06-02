@@ -205,16 +205,16 @@ class SignalProcessor:
 
     def _extract_fund_action(self, text: str) -> str:
         """Extract one allowed fund action, preferring explicit final decision sections."""
-        allowed_actions = '申购|分批申购|持有|赎回|观望'
+        allowed_actions = '分批申购|申购|持有|赎回|观望'
         for section in self._fund_candidate_sections(text):
             for pattern in [
                 rf'(?:最终基金建议|基金建议|最终建议|明确建议|最终决策|基金决策)[^\n：:]{{0,20}}[：:]\s*(?:\*\*)?({allowed_actions})(?:\*\*)?',
-                rf'(?:建议|行动方案)[^\n。；;]{{0,30}}({allowed_actions})',
+                rf'(?:建议|行动方案)[^\n。；;]{{0,30}}?({allowed_actions})',
                 rf'({allowed_actions})',
             ]:
                 matches = re.findall(pattern, section)
                 if matches:
-                    return matches[-1]
+                    return matches[0]
         return '观望'
 
     def _fund_candidate_sections(self, text: str) -> list[str]:

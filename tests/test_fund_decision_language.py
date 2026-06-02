@@ -40,6 +40,49 @@ def test_fund_signal_processing_preserves_watch_and_redeem_without_target_price(
     assert "target_price" not in redeem
 
 
+def test_fund_signal_processing_preserves_batch_subscription_in_free_text():
+    from tradingagents.graph.signal_processing import SignalProcessor
+
+    processor = SignalProcessor(quick_thinking_llm=None)
+
+    result = processor.process_signal(
+        "建议在回撤后分批申购，理由是净值波动仍高但长期配置价值改善。",
+        asset_type="fund",
+    )
+
+    assert result["action"] == "分批申购"
+    assert "target_price" not in result
+
+
+def test_research_manager_fund_prompt_requires_one_action(monkeypatch):
+    from tradingagents.agents.managers import research_manager
+    from types import SimpleNamespace
+
+    captured = {}
+
+    class DummyLLM:
+        def invoke(self, prompt):
+            captured["prompt"] = prompt
+            return SimpleNamespace(content="基金建议：持有。")
+
+    state = {
+        "asset_type": "fund",
+        "company_of_interest": "008763",
+        "market_report": "",
+        "sentiment_report": "",
+        "news_report": "",
+        "fundamentals_report": "",
+        "investment_debate_state": {"history": "", "count": 0},
+    }
+
+    node = research_manager.create_research_manager(DummyLLM(), memory=None)
+    node(state)
+
+    prompt = captured["prompt"]
+    assert "只能从申购、分批申购、持有、赎回、观望中选择一个" in prompt
+    assert "禁止把完整选项列表作为建议输出" in prompt
+
+
 def test_fund_report_section_labels_use_fund_language():
     from tradingagents.graph.trading_graph import _report_section_labels_for_asset
 
