@@ -209,13 +209,19 @@ class SignalProcessor:
         for section in self._fund_candidate_sections(text):
             for pattern in [
                 rf'(?:最终基金建议|基金建议|最终建议|明确建议|最终决策|基金决策)[^\n：:]{{0,20}}[：:]\s*(?:\*\*)?({allowed_actions})(?:\*\*)?',
-                rf'(?:建议|行动方案)[^\n。；;]{{0,30}}?({allowed_actions})',
+                rf'(?<!不)(?<!不要)(?:建议|行动方案)[^\n。；;]{{0,30}}?({allowed_actions})',
                 rf'({allowed_actions})',
             ]:
-                matches = re.findall(pattern, section)
-                if matches:
-                    return matches[0]
+                for match in re.finditer(pattern, section):
+                    action = match.group(1)
+                    if not self._is_negated_fund_action(section, match.start(1)):
+                        return action
         return '观望'
+
+    def _is_negated_fund_action(self, text: str, action_start: int) -> bool:
+        boundary = max(text.rfind(mark, 0, action_start) for mark in ["，", "。", "；", ";", "\n"])
+        context = text[boundary + 1:action_start]
+        return any(term in context for term in ["不建议", "不要", "暂不", "不宜", "避免", "勿", "禁止"])
 
     def _fund_candidate_sections(self, text: str) -> list[str]:
         sections = []

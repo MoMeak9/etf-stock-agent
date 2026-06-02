@@ -54,6 +54,24 @@ def test_fund_signal_processing_preserves_batch_subscription_in_free_text():
     assert "target_price" not in result
 
 
+def test_fund_signal_processing_prefers_positive_recommendation_after_negation():
+    from tradingagents.graph.signal_processing import SignalProcessor
+
+    processor = SignalProcessor(quick_thinking_llm=None)
+
+    not_subscribe = processor.process_signal(
+        "不建议申购，建议观望。理由是申购状态和宏观风险仍不清晰。",
+        asset_type="fund",
+    )
+    keep_watch = processor.process_signal(
+        "行动方案：不要申购，继续观望。理由是短期净值波动偏高。",
+        asset_type="fund",
+    )
+
+    assert not_subscribe["action"] == "观望"
+    assert keep_watch["action"] == "观望"
+
+
 def test_research_manager_fund_prompt_requires_one_action(monkeypatch):
     from tradingagents.agents.managers import research_manager
     from types import SimpleNamespace

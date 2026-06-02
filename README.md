@@ -6,7 +6,9 @@ ETF Stock Agent is a focused extraction of the ETF and stock analysis core from 
 
 - Stock analysis agents: market, fundamentals, news, social, China market
 - ETF analysis agents: market, flow, news, product
+- Open-ended public fund analysis agents: NAV/performance, product/manager, portfolio/macro, events/announcements
 - Structured ETF research packages for market, product, exposure, flow, and event data
+- Structured fund research packages for NAV, product, portfolio, event, and macro context data
 - LangGraph orchestration for analyst reports, investment debate, trader plan, risk debate, and final decision
 - Data adapters for yfinance, Alpha Vantage, AKShare, Tushare, BaoStock, and HK stock helpers
 - CLI flows via `etf-stock-agent` / `tradingagents` and batch analysis via `analyze.py`
@@ -21,7 +23,7 @@ pip install -e ".[cn]"
 cp .env.example .env
 ```
 
-Fill `.env` with the LLM and data provider keys you actually use. For US stock data with yfinance, no market data key is required. For A-share ETF/stock data, set `TUSHARE_TOKEN` when using Tushare.
+Fill `.env` with the LLM and data provider keys you actually use. For US stock data with yfinance, no market data key is required. For A-share ETF/stock/fund data, set `TUSHARE_TOKEN` when using Tushare.
 
 ## Examples
 
@@ -126,10 +128,41 @@ python analyze.py 159949 --asset-type etf -l 3 -d 2026-05-21
 python analyze.py 159949 --asset-type auto -l 3 -d 2026-05-21
 ```
 
+## 开放式公募基金中文使用说明
+
+本项目支持普通开放式公募基金分析，例如 `008763`。基金模式会启用净值收益、产品与基金经理、持仓与宏观匹配、公告与事件四类分析师，最终输出面向中长期持有人的基金建议：申购、分批申购、持有、赎回或观望。
+
+基金数据优先使用 Tushare，并在可用时使用 AKShare 作为 fallback。分析链路会尝试覆盖 QDII、债券基金、货币基金、混合/股票型基金等开放式基金常见场景，并将申购/赎回状态、限购或暂停公告、持仓暴露、基金经理、净值回撤、宏观环境、汇率/利率/信用/流动性风险纳入判断。
+
+```bash
+python analyze.py 008763 -l 3
+python analyze.py 008763 --asset-type fund -l 3
+python analyze.py 008763 --asset-type auto -l 3
+```
+
+`analyze.py` 默认使用 `--asset-type auto`，所以开放式基金通常不需要显式传入 `--asset-type fund`。如果同一批次包含股票、ETF 和开放式基金，请拆成不同批次运行。
+
+也可以从 Python 入口运行：
+
+```python
+from tradingagents.graph.trading_graph import TradingAgentsGraph
+from tradingagents.default_config import DEFAULT_CONFIG
+
+config = DEFAULT_CONFIG.copy()
+config["asset_type"] = "fund"
+config["selected_fund_analysts"] = ["nav", "product", "portfolio", "event"]
+
+graph = TradingAgentsGraph(config=config)
+state, decision = graph.propagate("008763", "2026-05-21")
+print(decision)
+```
+
+基金模式不会使用股票目标价、止损、买入/卖出等短线交易语言，也不会套用 ETF 二级市场折溢价套利或盘中交易逻辑。
+
 报告会写入：
 
 ```text
-tradingagents/docs/reports/{ETF代码}_{日期}_report.md
+tradingagents/docs/reports/{代码}_{日期}_report.md
 ```
 
 ### ETF 数据口径
@@ -145,7 +178,7 @@ tradingagents/docs/reports/{ETF代码}_{日期}_report.md
 - ETF 代码直接传 6 位代码即可，例如 `159949`，不需要写成 `159949.SZ`。
 - 交易日期建议使用 `YYYY-MM-DD`，例如 `2026-05-21`。
 - Tushare 对部分 ETF 或指数权重接口可能返回空数据；报告中的 `Warnings` 和 `Missing Fields` 会说明数据缺口。
-- `analyze.py` 同时支持股票和 ETF。默认按股票分析；ETF 请使用 `--asset-type etf`，或使用 `--asset-type auto` 自动识别。同一批次不要混合股票和 ETF。
+- `analyze.py` 同时支持股票、ETF 和开放式基金。默认自动识别；ETF 可使用 `--asset-type etf`，开放式基金可使用 `--asset-type fund`。同一批次不要混合股票、ETF 和开放式基金。
 
 ## A-Share ETF Research Packages
 
@@ -162,6 +195,7 @@ Batch stock or ETF analysis:
 ```bash
 python analyze.py 000001 600519 AAPL -l 3 -w 2
 python analyze.py 159949 510300 --asset-type etf -l 3 -w 2
+python analyze.py 008763 --asset-type fund -l 3
 ```
 
 ## Sensitive Data
@@ -222,6 +256,20 @@ curl -sS -X POST http://127.0.0.1:8000/api/v1/analysis/jobs \
     "date": "2026-05-22",
     "level": 3,
     "asset_type": "etf"
+  }'
+```
+
+Submit an open-ended public fund job:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8000/api/v1/analysis/jobs \
+  -H 'Authorization: Bearer replace-with-a-long-random-string' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "tickers": ["008763"],
+    "date": "2026-05-22",
+    "level": 3,
+    "asset_type": "fund"
   }'
 ```
 
