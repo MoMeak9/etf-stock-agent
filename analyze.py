@@ -593,17 +593,25 @@ def _action_style(action: str) -> str:
     return "bold yellow"
 
 
+def _asset_display(asset_type: str) -> dict:
+    if asset_type == "etf":
+        return {"label": "A股ETF", "list_label": "ETF列表", "item_label": "ETF", "action_label": "操作", "show_target": True}
+    if asset_type == "fund":
+        return {"label": "开放式基金", "list_label": "基金列表", "item_label": "基金", "action_label": "基金建议", "show_target": False}
+    return {"label": "股票", "list_label": "股票列表", "item_label": "股票", "action_label": "操作", "show_target": True}
+
+
 # ─── 输出格式化 ──────────────────────────────────────────────────
 def print_header(args: argparse.Namespace, intensity: dict):
     """用 Rich Panel 打印分析任务头部信息。"""
     level_colors = {1: "cyan", 2: "green", 3: "yellow", 4: "magenta", 5: "red"}
     lv_color = level_colors.get(args.level, "white")
     original_date = getattr(args, "original_date", args.date)
-    asset_label = "A股ETF" if getattr(args, "asset_type", "stock") == "etf" else "股票"
+    display = _asset_display(getattr(args, "asset_type", "stock"))
 
     info_lines = [
-        f"[bold]{asset_label}列表[/bold]  : [cyan]{', '.join(args.tickers)}[/cyan]",
-        f"[bold]资产类型[/bold]  : {asset_label}",
+        f"[bold]{display['list_label']}[/bold]  : [cyan]{', '.join(args.tickers)}[/cyan]",
+        f"[bold]资产类型[/bold]  : {display['label']}",
         f"[bold]分析日期[/bold]  : {original_date} -> {args.date}",
         f"[bold]分析强度[/bold]  : [{lv_color}]Lv.{args.level} {intensity['name']} — {intensity['desc']}[/{lv_color}]",
         f"[bold]分析师团队[/bold]: {', '.join(intensity['analysts'])}",
@@ -613,7 +621,7 @@ def print_header(args: argparse.Namespace, intensity: dict):
     ]
     panel = Panel(
         "\n".join(info_lines),
-        title="[bold]TradingAgents 股票/ETF分析工具[/bold]",
+        title="[bold]TradingAgents 股票/ETF/基金分析工具[/bold]",
         subtitle=f"共 {len(args.tickers)} 个标的",
         border_style="blue",
         padding=(1, 2),
@@ -622,8 +630,8 @@ def print_header(args: argparse.Namespace, intensity: dict):
     console.print()
 
 
-def print_result(result: Dict[str, Any], idx: int, total: int):
-    """用 Rich 打印单只股票的结果摘要。"""
+def print_result(result: Dict[str, Any], idx: int, total: int, asset_type: str = "stock"):
+    """用 Rich 打印单只标的的结果摘要。"""
     ticker = result["ticker"]
 
     if result["status"] == "error":
@@ -641,11 +649,15 @@ def print_result(result: Dict[str, Any], idx: int, total: int):
     conf_str = f"{conf:.0%}" if isinstance(conf, (int, float)) else str(conf or "-")
     risk = d.get("risk_score")
     risk_str = f"{risk:.0%}" if isinstance(risk, (int, float)) else str(risk or "-")
+    display = _asset_display(asset_type)
+    target_text = ""
+    if display["show_target"]:
+        target_text = f"目标价: {d.get('target_price', '-')}  "
 
     console.print(
         f"  [bold green]✓[/bold green] [{idx}/{total}] "
         f"[cyan]{ticker}[/cyan] — [{astyle}]{action}[/{astyle}]  "
-        f"目标价: {d.get('target_price', '-')}  "
+        f"{target_text}"
         f"置信度: {conf_str}  风险: {risk_str}  "
         f"[dim]({result['elapsed']}s)[/dim]"
     )
@@ -670,9 +682,10 @@ def print_result(result: Dict[str, Any], idx: int, total: int):
             console.print(f"    [yellow]完整报告未找到: {report_path}[/yellow]")
 
 
-def print_summary(results: List[Dict[str, Any]]):
+def print_summary(results: List[Dict[str, Any]], asset_type: str = "stock"):
     """用 Rich Table 打印最终汇总表。"""
     console.print()
+    display = _asset_display(asset_type)
 
     # ── 决策汇总表 ──
     table = Table(
@@ -683,9 +696,10 @@ def print_summary(results: List[Dict[str, Any]]):
         title_style="bold",
         padding=(0, 1),
     )
-    table.add_column("股票", style="cyan", justify="center", width=10)
-    table.add_column("操作", justify="center", width=8)
-    table.add_column("目标价", justify="right", width=12)
+    table.add_column(display["item_label"], style="cyan", justify="center", width=10)
+    table.add_column(display["action_label"], justify="center", width=8)
+    if display["show_target"]:
+        table.add_column("目标价", justify="right", width=12)
     table.add_column("置信度", justify="center", width=8)
     table.add_column("风险", justify="center", width=8)
     table.add_column("LLM次", justify="right", width=7)
@@ -701,16 +715,14 @@ def print_summary(results: List[Dict[str, Any]]):
         d = r["decision"]
         action = str(d.get("action", "-"))
         astyle = _action_style(action)
-        price = str(d.get("target_price", "-"))
         conf = d.get("confidence")
         conf_str = f"{conf:.0%}" if isinstance(conf, (int, float)) else str(conf or "-")
         risk = d.get("risk_score")
         risk_str = f"{risk:.0%}" if isinstance(risk, (int, float)) else str(risk or "-")
         st = r.get("stats", {})
-        table.add_row(
+        row = [
             r["ticker"],
             f"[{astyle}]{action}[/{astyle}]",
-            price,
             conf_str,
             risk_str,
             str(st.get("llm_calls", "-")),
@@ -718,15 +730,21 @@ def print_summary(results: List[Dict[str, Any]]):
             _fmt_tokens(st.get("tokens_in", 0)),
             _fmt_tokens(st.get("tokens_out", 0)),
             f"{r['elapsed']}s",
-        )
+        ]
+        if display["show_target"]:
+            row.insert(2, str(d.get("target_price", "-")))
+        table.add_row(*row)
 
     for r in failed:
-        table.add_row(
+        row = [
             r["ticker"],
             "[red]失败[/red]",
-            "-", "-", "-", "-", "-", "-", "-",
+            "-", "-", "-", "-", "-", "-",
             f"{r['elapsed']}s",
-        )
+        ]
+        if display["show_target"]:
+            row.insert(2, "-")
+        table.add_row(*row)
 
     console.print(table)
 
@@ -981,7 +999,7 @@ def main(argv: Optional[List[str]] = None):
             # Live 退出后，把进度条最终状态补齐然后显示结果
             stock_progress.update(stask, completed=total_steps_per_stock, phase="[green]完成[/green]")
             results.append(result)
-            print_result(result, i, len(tickers))
+            print_result(result, i, len(tickers), asset_type=args.asset_type)
             console.print()
             batch_progress.update(batch_task, advance=1)
 
@@ -1038,7 +1056,7 @@ def main(argv: Optional[List[str]] = None):
         # 打印每条结果
         console.print()
         for i, r in enumerate(results, 1):
-            print_result(r, i, len(tickers))
+            print_result(r, i, len(tickers), asset_type=args.asset_type)
             console.print()
 
     # 按原始顺序排序结果
@@ -1046,7 +1064,7 @@ def main(argv: Optional[List[str]] = None):
     results.sort(key=lambda r: order.get(r["ticker"], 999))
 
     total_wall = round(time.time() - batch_t0, 1)
-    print_summary(results)
+    print_summary(results, asset_type=args.asset_type)
     console.print(f"  [dim]总墙钟时间: {total_wall}s[/dim]")
 
     # 退出码: 有失败则返回 1
