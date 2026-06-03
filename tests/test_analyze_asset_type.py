@@ -46,6 +46,16 @@ class AnalyzeAssetTypeTests(unittest.TestCase):
         with patch("tradingagents.dataflows.fund_registry.admit_fund", return_value=admission):
             self.assertEqual(analyze.resolve_asset_type(["008763"], "auto"), "fund")
 
+    def test_auto_asset_type_detects_001_open_fund(self):
+        admission = FundAdmission(
+            symbol="001513",
+            ts_code="001513.OF",
+            is_supported=True,
+            fund_type="hybrid",
+        )
+        with patch("tradingagents.dataflows.fund_registry.admit_fund", return_value=admission):
+            self.assertEqual(analyze.resolve_asset_type(["001513"], "auto"), "fund")
+
     def test_auto_asset_type_rejects_mixed_stock_and_etf_batch(self):
         with self.assertRaisesRegex(ValueError, "mixed"):
             analyze.resolve_asset_type(["159949", "600519"], "auto")
