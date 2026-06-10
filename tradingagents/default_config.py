@@ -1,11 +1,16 @@
 import os
 
+_PROJECT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "."))
+
 DEFAULT_CONFIG = {
-    "project_dir": os.path.abspath(os.path.join(os.path.dirname(__file__), ".")),
+    "project_dir": _PROJECT_DIR,
     "results_dir": os.getenv("TRADINGAGENTS_RESULTS_DIR", "./results"),
+    "reports_dir": os.getenv(
+        "TRADINGAGENTS_REPORTS_DIR",
+        os.path.join(_PROJECT_DIR, "docs", "reports"),
+    ),
     "data_cache_dir": os.path.join(
-        os.path.abspath(os.path.join(os.path.dirname(__file__), ".")),
-        "dataflows/data_cache",
+        _PROJECT_DIR, "dataflows/data_cache"
     ),
     # LLM settings
     "llm_provider": "openai",

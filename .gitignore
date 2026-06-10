@@ -24,6 +24,7 @@ ENV/
 .env
 .env.*
 !.env.example
+!.env.docker.example
 *.pem
 *.key
 *.crt
@@ -36,6 +37,7 @@ credentials/
 # Generated/runtime data
 results/
 eval_results/
+reports/
 tradingagents/docs/reports/
 **/data_cache/
 *.log

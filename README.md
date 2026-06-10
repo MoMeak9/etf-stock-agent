@@ -204,12 +204,18 @@ The repository ignores `.env`, `.env.*`, generated reports, caches, credentials,
 
 ## API Service
 
-The API service is intended for local or intranet deployment. It keeps job state in memory only, writes reports to the existing local report directory, and does not use Redis, SQL databases, or static database files.
+The API service is intended for local or intranet single-machine deployment. It keeps job state in memory only, writes Markdown reports to a configurable local directory, and does not use Redis, SQL databases, object storage, or static database files.
 
 Configure a single shared token in `.env`:
 
 ```bash
 ANALYSIS_API_TOKEN=replace-with-a-long-random-string
+```
+
+Optionally configure where reports are written:
+
+```bash
+TRADINGAGENTS_REPORTS_DIR=./reports
 ```
 
 Start the local API server:
@@ -292,6 +298,58 @@ Download a generated Markdown report:
 ```bash
 curl -sS -o report.md http://127.0.0.1:8000/api/v1/analysis/jobs/{job_id}/reports/600519 \
   -H 'Authorization: Bearer replace-with-a-long-random-string'
+```
+
+### Docker Deployment
+
+Docker Compose is the recommended server deployment path for local or intranet single-machine use.
+
+Prepare the environment file on the server:
+
+```bash
+cp .env.docker.example .env
+```
+
+Edit `.env` and set at least:
+
+```bash
+ANALYSIS_API_TOKEN=replace-with-a-long-random-string
+DEEPSEEK_API_KEY=your-key-if-using-deepseek
+TUSHARE_TOKEN=your-token-if-using-tushare
+TRADINGAGENTS_REPORTS_VOLUME=/srv/etf-stock-agent/reports
+```
+
+`TRADINGAGENTS_REPORTS_VOLUME` is the host-side report directory. Docker Compose mounts it into the container at `/app/reports`, and the container writes reports there through `TRADINGAGENTS_REPORTS_DIR=/app/reports`.
+
+Build and start:
+
+```bash
+docker compose up -d --build
+```
+
+Check service health:
+
+```bash
+curl -sS http://127.0.0.1:8000/healthz
+```
+
+View logs:
+
+```bash
+docker compose logs -f etf-stock-agent-api
+```
+
+Upgrade after pulling new code:
+
+```bash
+git pull --ff-only
+docker compose up -d --build
+```
+
+Stop the service:
+
+```bash
+docker compose down
 ```
 
 Minimal systemd deployment on a local or intranet host:

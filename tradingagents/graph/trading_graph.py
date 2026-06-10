@@ -20,6 +20,7 @@ from tradingagents.agents.utils.agent_states import (
 )
 from tradingagents.dataflows.config import set_config, set_market_context, set_asset_context
 from tradingagents.dataflows.market_utils import detect_market, is_supported_cn_etf
+from tradingagents.reporting import reports_dir_from_config
 
 # Import the tool methods from modular tool files
 from tradingagents.agents.utils.core_stock_tools import get_stock_data
@@ -576,16 +577,14 @@ class TradingAgentsGraph:
         )
 
     def _generate_report(self, trade_date, final_state, decision):
-        """Generate a markdown analysis report in docs/reports/.
+        """Generate a markdown analysis report in the configured report directory.
 
         Each execution produces one .md file containing all agent outputs.
         """
         from datetime import datetime as _dt
 
         ticker = final_state["company_of_interest"]
-        report_dir = Path(
-            os.path.join(self.config.get("project_dir", "."), "docs", "reports")
-        )
+        report_dir = reports_dir_from_config(self.config)
         report_dir.mkdir(parents=True, exist_ok=True)
 
         filename = f"{ticker}_{trade_date}_report.md"

@@ -1,0 +1,16 @@
+services:
+  etf-stock-agent-api:
+    build: .
+    image: etf-stock-agent-api:local
+    env_file:
+      - .env
+    environment:
+      ANALYSIS_API_HOST: 0.0.0.0
+      ANALYSIS_API_PORT: "8000"
+      ANALYSIS_API_WORKERS: "${ANALYSIS_API_WORKERS:-1}"
+      TRADINGAGENTS_REPORTS_DIR: /app/reports
+    ports:
+      - "${ANALYSIS_API_PORT:-8000}:8000"
+    volumes:
+      - "${TRADINGAGENTS_REPORTS_VOLUME:-./reports}:/app/reports"
+    restart: unless-stopped
