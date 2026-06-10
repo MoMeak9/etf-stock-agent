@@ -1,4 +1,7 @@
-"""A-share stock data fetching via tushare (fallback vendor for akshare)."""
+"""Stock data fetching via tushare.
+
+Supports A-share data and the Tushare US daily endpoint for US stock prices.
+"""
 
 import os
 import time
@@ -8,10 +11,43 @@ from typing import Annotated
 import pandas as pd
 
 from .config import get_config
+from .market_utils import detect_market
 from .stockstats_utils import _clean_dataframe
 
 # Maximum number of trading days to search backwards when current date has no data
 _DATE_FALLBACK_DAYS = 10
+
+_COMMON_US_EXCHANGE_SUFFIXES = {
+    "AAPL": "O",
+    "AMD": "O",
+    "AMZN": "O",
+    "COST": "O",
+    "GOOG": "O",
+    "GOOGL": "O",
+    "META": "O",
+    "MSFT": "O",
+    "NFLX": "O",
+    "NVDA": "O",
+    "TSLA": "O",
+    "BABA": "N",
+    "BAC": "N",
+    "BRK.B": "N",
+    "DIS": "N",
+    "GE": "N",
+    "IBM": "N",
+    "JNJ": "N",
+    "JPM": "N",
+    "KO": "N",
+    "MA": "N",
+    "NKE": "N",
+    "ORCL": "N",
+    "PFE": "N",
+    "PG": "N",
+    "UNH": "N",
+    "V": "N",
+    "WMT": "N",
+    "XOM": "N",
+}
 
 
 class TushareError(Exception):
@@ -48,6 +84,49 @@ def _to_ts_code(symbol: str) -> str:
     return f"{symbol}.SZ"
 
 
+def _lookup_us_ts_code(pro, symbol: str) -> str | None:
+    """Look up the Tushare US ts_code from us_basic when available."""
+    try:
+        df = pro.us_basic()
+    except Exception:
+        return None
+
+    if df is None or df.empty:
+        return None
+
+    s = str(symbol).strip().upper()
+    for col in ("symbol", "ticker", "name", "ts_code"):
+        if col not in df.columns:
+            continue
+        matches = df[df[col].astype(str).str.upper() == s]
+        if not matches.empty and "ts_code" in matches.columns:
+            return str(matches.iloc[0]["ts_code"]).upper()
+    return None
+
+
+def _to_us_ts_code(symbol: str, pro=None) -> str:
+    """Convert a US ticker to Tushare US ts_code format.
+
+    Tushare US stock daily APIs use suffixes such as ``NVDA.O`` for Nasdaq
+    listings and ``IBM.N`` for NYSE listings. Explicit suffixes win; otherwise
+    use a small common-symbol map, then optional ``us_basic`` lookup, then
+    Nasdaq as a deterministic fallback.
+    """
+    if not symbol:
+        raise TushareError("Empty symbol provided")
+
+    s = str(symbol).strip().upper()
+    if "." in s:
+        return s
+    if s in _COMMON_US_EXCHANGE_SUFFIXES:
+        return f"{s}.{_COMMON_US_EXCHANGE_SUFFIXES[s]}"
+    if pro is not None:
+        resolved = _lookup_us_ts_code(pro, s)
+        if resolved:
+            return resolved
+    return f"{s}.O"
+
+
 def _request_delay():
     """Add delay between requests."""
     config = get_config()
@@ -80,17 +159,94 @@ def _fallback_to_previous_trading_day(pro, ts_code: str, ref_date: str) -> pd.Da
     return df
 
 
+def _fallback_to_previous_us_trading_day(pro, ts_code: str, ref_date: str) -> pd.DataFrame:
+    """Search backwards for US daily data when the requested window is empty."""
+    ref_ts = ref_date.replace("-", "")
+    start_ts = (
+        pd.Timestamp(ref_ts) - pd.DateOffset(days=_DATE_FALLBACK_DAYS + 5)
+    ).strftime("%Y%m%d")
+
+    _request_delay()
+    return pro.us_daily(ts_code=ts_code, start_date=start_ts, end_date=ref_ts)
+
+
+def _format_ohlcv_output(
+    df: pd.DataFrame,
+    symbol: str,
+    start_date: str,
+    end_date: str,
+    market_label: str,
+    volume_multiplier: int = 1,
+) -> str:
+    """Normalize Tushare daily output to the common OHLCV CSV format."""
+    if df is None or df.empty:
+        raise TushareError(
+            f"No data found for {market_label} '{symbol}' between {start_date} and {end_date}"
+        )
+
+    df = df.rename(columns={
+        "trade_date": "Date",
+        "open": "Open",
+        "high": "High",
+        "low": "Low",
+        "close": "Close",
+        "vol": "Volume",
+    })
+
+    df["Date"] = pd.to_datetime(df["Date"]).dt.strftime("%Y-%m-%d")
+
+    if "Volume" in df.columns:
+        df["Volume"] = pd.to_numeric(df["Volume"], errors="coerce") * volume_multiplier
+
+    for col in ["Open", "High", "Low", "Close"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").round(2)
+
+    df = df.sort_values("Date")
+
+    output_cols = ["Date", "Open", "High", "Low", "Close", "Volume"]
+    available = [c for c in output_cols if c in df.columns]
+    df_out = df[available].set_index("Date")
+
+    csv_string = df_out.to_csv()
+
+    header = f"# Stock data for {symbol} from {start_date} to {end_date}\n"
+    header += f"# Market: {market_label} [tushare]\n"
+    header += f"# Total records: {len(df_out)}\n"
+    header += f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+
+    return header + csv_string
+
+
 def get_stock_data(
-    symbol: Annotated[str, "A-share stock code, e.g. 600519"],
+    symbol: Annotated[str, "A-share stock code or US ticker, e.g. 600519 or NVDA"],
     start_date: Annotated[str, "Start date in yyyy-mm-dd format"],
     end_date: Annotated[str, "End date in yyyy-mm-dd format"],
 ) -> str:
-    """Fetch A-share daily OHLCV data via tushare."""
+    """Fetch daily OHLCV data via tushare."""
     try:
         pro = _get_tushare_api()
-        ts_code = _to_ts_code(symbol)
         ts_start = start_date.replace("-", "")
         ts_end = end_date.replace("-", "")
+
+        market = detect_market(symbol)
+        if market == "us":
+            ts_code = _to_us_ts_code(symbol, pro)
+            _request_delay()
+            df = pro.us_daily(ts_code=ts_code, start_date=ts_start, end_date=ts_end)
+
+            if (df is None or df.empty) and _is_narrow_range(start_date, end_date):
+                df = _fallback_to_previous_us_trading_day(pro, ts_code, end_date)
+
+            return _format_ohlcv_output(
+                df,
+                symbol,
+                start_date,
+                end_date,
+                "US stock (USD)",
+            )
+
+        ts_code = _to_ts_code(symbol)
 
         _request_delay()
 
@@ -101,47 +257,14 @@ def get_stock_data(
         if (df is None or df.empty) and _is_narrow_range(start_date, end_date):
             df = _fallback_to_previous_trading_day(pro, ts_code, end_date)
 
-        if df is None or df.empty:
-            raise TushareError(
-                f"No data found for A-share '{symbol}' between {start_date} and {end_date}"
-            )
-
-        # Rename to standard format
-        df = df.rename(columns={
-            "trade_date": "Date",
-            "open": "Open",
-            "high": "High",
-            "low": "Low",
-            "close": "Close",
-            "vol": "Volume",
-        })
-
-        # Format Date
-        df["Date"] = pd.to_datetime(df["Date"]).dt.strftime("%Y-%m-%d")
-
-        # Volume: tushare unit is 手 (100 shares)
-        df["Volume"] = pd.to_numeric(df["Volume"], errors="coerce") * 100
-
-        # Round prices
-        for col in ["Open", "High", "Low", "Close"]:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors="coerce").round(2)
-
-        # Sort by date ascending
-        df = df.sort_values("Date")
-
-        output_cols = ["Date", "Open", "High", "Low", "Close", "Volume"]
-        available = [c for c in output_cols if c in df.columns]
-        df_out = df[available].set_index("Date")
-
-        csv_string = df_out.to_csv()
-
-        header = f"# Stock data for {symbol} from {start_date} to {end_date}\n"
-        header += f"# Market: A-share (CNY) [tushare]\n"
-        header += f"# Total records: {len(df_out)}\n"
-        header += f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-
-        return header + csv_string
+        return _format_ohlcv_output(
+            df,
+            symbol,
+            start_date,
+            end_date,
+            "A-share (CNY)",
+            volume_multiplier=100,
+        )
 
     except TushareError:
         raise
@@ -150,7 +273,7 @@ def get_stock_data(
 
 
 def get_indicators(
-    symbol: Annotated[str, "A-share stock code"],
+    symbol: Annotated[str, "A-share stock code or US ticker"],
     indicator: Annotated[str, "technical indicator name"],
     curr_date: Annotated[str, "current trading date, YYYY-mm-dd"],
     look_back_days: Annotated[int, "how many days to look back"] = 30,
@@ -161,7 +284,8 @@ def get_indicators(
 
     try:
         pro = _get_tushare_api()
-        ts_code = _to_ts_code(symbol)
+        market = detect_market(symbol)
+        ts_code = _to_us_ts_code(symbol, pro) if market == "us" else _to_ts_code(symbol)
 
         today = pd.Timestamp.today()
         start_date = (today - pd.DateOffset(years=15)).strftime("%Y%m%d")
@@ -178,7 +302,14 @@ def get_indicators(
             data = pd.read_csv(cache_file, on_bad_lines="skip")
         else:
             _request_delay()
-            data = pro.daily(ts_code=ts_code, start_date=start_date, end_date=end_date_str)
+            if market == "us":
+                data = pro.us_daily(
+                    ts_code=ts_code,
+                    start_date=start_date,
+                    end_date=end_date_str,
+                )
+            else:
+                data = pro.daily(ts_code=ts_code, start_date=start_date, end_date=end_date_str)
             if data is None or data.empty:
                 raise TushareError(f"No historical data for {symbol}")
 

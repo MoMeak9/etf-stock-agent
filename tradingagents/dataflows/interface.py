@@ -54,7 +54,7 @@ try:
 except ImportError:
     _AKSHARE_ETF_AVAILABLE = False
 
-# Tushare vendor imports (primary for A-share, optional: requires tushare package)
+# Tushare vendor imports (primary for A-share; also supports US price data)
 try:
     import tushare as _tushare_check  # verify the package is actually installed
     del _tushare_check
@@ -533,7 +533,7 @@ def route_to_vendor(method: str, *args, **kwargs):
         hk_vendors = ["hk", "yfinance"]
         all_available_vendors = [v for v in all_available_vendors if v in hk_vendors]
     else:
-        us_vendors = ["yfinance", "alpha_vantage"]
+        us_vendors = ["yfinance", "tushare", "alpha_vantage"]
         all_available_vendors = [v for v in all_available_vendors if v in us_vendors]
 
     fallback_vendors = primary_vendors.copy()
@@ -555,10 +555,8 @@ def route_to_vendor(method: str, *args, **kwargs):
             continue  # Rate limits trigger fallback
         except Exception as e:
             last_error = e
-            # For CN/HK vendors, any exception triggers fallback to next vendor
-            if market in ("cn", "hk"):
-                continue
-            raise
+            # Vendor-level failures should try the next compatible source.
+            continue
 
     # All vendors exhausted — return error string instead of raising,
     # so the LLM agent can see the error and continue gracefully.
