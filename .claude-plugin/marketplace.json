@@ -1,0 +1,19 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "etf-stock-agent",
+  "version": "0.1.0",
+  "description": "本机 ETF / 股票 / 开放式基金多智能体研究能力",
+  "tags": ["投研", "ETF", "A股", "本地服务"],
+  "owner": {
+    "name": "minlong",
+    "url": "https://github.com/MoMeak9/etf-stock-agent"
+  },
+  "plugins": [
+    {
+      "name": "etf-stock-analysis",
+      "description": "明确请求分析/研究某个股票、ETF 或开放式基金时，异步触发本仓库的多智能体研究并整理结论",
+      "source": "./plugins/etf-stock-analysis",
+      "category": "research"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "name": "etf-stock-analysis",
+  "description": "明确请求分析/研究股票、A股ETF或开放式基金时，异步触发 analyze.py 或本地 API 服务，并整理决策与报告路径",
+  "version": "0.1.0",
+  "author": {
+    "name": "minlong",
+    "url": "https://github.com/MoMeak9/etf-stock-agent"
+  },
+  "homepage": "https://github.com/MoMeak9/etf-stock-agent",
+  "repository": "https://github.com/MoMeak9/etf-stock-agent",
+  "license": "Apache-2.0",
+  "keywords": ["stock", "etf", "fund", "research", "a-share", "tradingagents"]
+}
